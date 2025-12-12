@@ -1,0 +1,85 @@
+import type { CandidateIssue, Vote, ApprovedIssue, IssueSummary } from '../types/index.js';
+
+/**
+ * Result from running the scanner agent
+ */
+export interface ScannerResult {
+  /** Candidate issues detected */
+  issues: CandidateIssue[];
+  /** Duration in milliseconds */
+  durationMs: number;
+  /** Files scanned */
+  filesScanned: number;
+  /** Cost in USD */
+  costUsd: number;
+}
+
+/**
+ * Result from a single voter
+ */
+export interface VoterResult {
+  /** Voter ID */
+  voterId: string;
+  /** Votes cast by this voter */
+  votes: Vote[];
+  /** Duration in milliseconds */
+  durationMs: number;
+  /** Cost in USD */
+  costUsd: number;
+}
+
+/**
+ * Result from the arbitrator
+ */
+export interface ArbitratorResult {
+  /** Issues that received majority approval */
+  approvedIssues: ApprovedIssue[];
+  /** Issues that were rejected */
+  rejectedIssues: CandidateIssue[];
+  /** Tickets created */
+  ticketsCreated: string[];
+}
+
+/**
+ * Options for running the scanner agent
+ */
+export interface ScannerOptions {
+  /** Target directory to scan */
+  targetPath: string;
+  /** Agent ID to use */
+  agentId: string;
+  /** Existing issues summary for deduplication */
+  existingIssues: IssueSummary[];
+  /** Callback for progress updates */
+  onProgress?: (message: string) => void;
+}
+
+/**
+ * Options for running a voter agent
+ */
+export interface VoterOptions {
+  /** Voter ID (1, 2, or 3) */
+  voterId: string;
+  /** Target directory for context */
+  targetPath: string;
+  /** Agent definition context */
+  agentId: string;
+  /** Candidate issues to vote on */
+  issues: CandidateIssue[];
+  /** Callback for progress updates */
+  onProgress?: (issueId: string, completed: boolean) => void;
+}
+
+/**
+ * Options for the arbitrator
+ */
+export interface ArbitratorOptions {
+  /** Target directory */
+  targetPath: string;
+  /** All candidate issues */
+  candidateIssues: CandidateIssue[];
+  /** All votes from all voters */
+  votes: Vote[];
+  /** Minimum votes needed for approval (default: 2 out of 3) */
+  minimumVotes?: number;
+}
