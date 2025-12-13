@@ -2,10 +2,8 @@ import type { CandidateIssue, Vote, ApprovedIssue } from '../types/index.js';
 import type { ArbitratorResult, ArbitratorOptions } from './types.js';
 import { addApprovedIssues } from '../storage/issues.js';
 import { createTicketFiles } from '../storage/tickets.js';
+import { countApprovals } from '../utils/votes.js';
 
-/**
- * Group votes by issue ID
- */
 function groupVotesByIssue(votes: Vote[]): Map<string, Vote[]> {
   const grouped = new Map<string, Vote[]>();
 
@@ -18,21 +16,22 @@ function groupVotesByIssue(votes: Vote[]): Map<string, Vote[]> {
   return grouped;
 }
 
-/**
- * Count approvals for an issue
- */
-function countApprovals(votes: Vote[]): number {
-  return votes.filter(v => v.approve).length;
-}
 
 /**
- * Run the arbitrator to filter issues and create tickets
+ * Run the arbitrator to filter issues by vote count and create tickets.
  *
- * The arbitrator:
+ * The arbitrator performs the final stage of the scan pipeline:
  * 1. Collects all votes for each candidate issue
- * 2. Filters to only issues with majority approval (default: 2/3 votes)
- * 3. Creates ticket files for approved issues
- * 4. Updates the issue store
+ * 2. Filters to only issues with sufficient approval votes (default: 2/3 majority)
+ * 3. Creates markdown ticket files for approved issues (organized by severity)
+ * 4. Persists approved issues to the issue store for deduplication
+ *
+ * @param options - Configuration for arbitration
+ * @param options.targetPath - Absolute path to the codebase (for ticket storage in .rover/)
+ * @param options.candidateIssues - All candidate issues detected by the scanner
+ * @param options.votes - All votes from all voters on the candidate issues
+ * @param options.minimumVotes - Minimum approval votes required (default: 2 for 3 voters)
+ * @returns Arbitration results including approved/rejected issues and created ticket paths
  */
 export async function runArbitrator(options: ArbitratorOptions): Promise<ArbitratorResult> {
   const {
@@ -82,37 +81,34 @@ export async function runArbitrator(options: ArbitratorOptions): Promise<Arbitra
   };
 }
 
-/**
- * Get a summary of the arbitration result
- */
 export function getArbitrationSummary(result: ArbitratorResult): string {
   const { approvedIssues, rejectedIssues, ticketsCreated } = result;
 
-  const lines: string[] = [];
+  const reportLines: string[] = [];
 
-  lines.push(`Arbitration Complete`);
-  lines.push(`-------------------`);
-  lines.push(`Total candidates: ${approvedIssues.length + rejectedIssues.length}`);
-  lines.push(`Approved: ${approvedIssues.length}`);
-  lines.push(`Rejected: ${rejectedIssues.length}`);
-  lines.push(`Tickets created: ${ticketsCreated.length}`);
+  reportLines.push(`Arbitration Complete`);
+  reportLines.push(`-------------------`);
+  reportLines.push(`Total candidates: ${approvedIssues.length + rejectedIssues.length}`);
+  reportLines.push(`Approved: ${approvedIssues.length}`);
+  reportLines.push(`Rejected: ${rejectedIssues.length}`);
+  reportLines.push(`Tickets created: ${ticketsCreated.length}`);
 
   if (approvedIssues.length > 0) {
-    lines.push('');
-    lines.push('Approved Issues:');
+    reportLines.push('');
+    reportLines.push('Approved Issues:');
     for (const issue of approvedIssues) {
-      const voteCount = issue.votes.filter(v => v.approve).length;
-      lines.push(`  - [${issue.severity.toUpperCase()}] ${issue.title} (${voteCount}/3 votes)`);
+      const voteCount = countApprovals(issue.votes);
+      reportLines.push(`  - [${issue.severity.toUpperCase()}] ${issue.title} (${voteCount}/3 votes)`);
     }
   }
 
   if (rejectedIssues.length > 0) {
-    lines.push('');
-    lines.push('Rejected Issues:');
+    reportLines.push('');
+    reportLines.push('Rejected Issues:');
     for (const issue of rejectedIssues) {
-      lines.push(`  - ${issue.title}`);
+      reportLines.push(`  - ${issue.title}`);
     }
   }
 
-  return lines.join('\n');
+  return reportLines.join('\n');
 }

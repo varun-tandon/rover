@@ -67,8 +67,16 @@ export interface BatchRunResult {
   failedAgents: number;
 }
 
+// MAX_RETRIES = 2: Balances reliability with API costs. Testing showed transient errors
+// (JSON parsing, network issues) typically resolve within 2 retries.
 const MAX_RETRIES = 2;
+
+// RETRY_DELAY_MS = 1000: Base delay for exponential backoff (multiplied by retry count).
+// 1 second base avoids overwhelming the API while keeping total retry time reasonable.
 const RETRY_DELAY_MS = 1000;
+
+// DEFAULT_CONCURRENCY = 4: Balances throughput with API rate limits and cost control.
+// Higher values risk rate limiting; lower values extend total batch time unnecessarily.
 const DEFAULT_CONCURRENCY = 4;
 
 /**
@@ -220,7 +228,7 @@ export async function runAgentsBatched(
   let completedCount = 0;
 
   // Worker function - pulls from queue until empty
-  async function worker(): Promise<void> {
+  async function processAgentFromQueue(): Promise<void> {
     while (queue.length > 0) {
       const agentId = queue.shift();
       if (!agentId) break; // Queue exhausted by another worker
@@ -264,41 +272,54 @@ export async function runAgentsBatched(
 
   // Spawn workers (limit to actual queue size if smaller than concurrency)
   const workerCount = Math.min(concurrency, totalAgents);
-  const workers = Array.from({ length: workerCount }, () => worker());
+  const workers = Array.from({ length: workerCount }, () => processAgentFromQueue());
   await Promise.all(workers);
 
-  // Aggregate results
-  const totalCandidateIssues = agentResults.reduce(
-    (sum, r) => sum + r.scanResult.issues.length, 0
+  // Aggregate results in single pass
+  const aggregated = agentResults.reduce(
+    (acc, result) => ({
+      totalCandidateIssues: acc.totalCandidateIssues + result.scanResult.issues.length,
+      totalApprovedIssues: acc.totalApprovedIssues + result.arbitratorResult.approvedIssues.length,
+      totalRejectedIssues: acc.totalRejectedIssues + result.arbitratorResult.rejectedIssues.length,
+      totalTickets: acc.totalTickets + result.arbitratorResult.ticketsCreated.length,
+      totalCostUsd: acc.totalCostUsd + result.scanResult.costUsd +
+        result.voterResults.reduce((sum, vr) => sum + vr.costUsd, 0),
+      failedAgents: acc.failedAgents + (result.error !== undefined ? 1 : 0)
+    }),
+    { totalCandidateIssues: 0, totalApprovedIssues: 0, totalRejectedIssues: 0, totalTickets: 0, totalCostUsd: 0, failedAgents: 0 }
   );
-  const totalApprovedIssues = agentResults.reduce(
-    (sum, r) => sum + r.arbitratorResult.approvedIssues.length, 0
-  );
-  const totalRejectedIssues = agentResults.reduce(
-    (sum, r) => sum + r.arbitratorResult.rejectedIssues.length, 0
-  );
-  const totalTickets = agentResults.reduce(
-    (sum, r) => sum + r.arbitratorResult.ticketsCreated.length, 0
-  );
-  const totalCostUsd = agentResults.reduce(
-    (sum, r) => r.scanResult.costUsd + r.voterResults.reduce((vs, v) => vs + v.costUsd, 0) + sum, 0
-  );
-  const failedAgents = agentResults.filter(r => r.error !== undefined).length;
 
   return {
     agentResults,
-    totalCandidateIssues,
-    totalApprovedIssues,
-    totalRejectedIssues,
-    totalTickets,
+    totalCandidateIssues: aggregated.totalCandidateIssues,
+    totalApprovedIssues: aggregated.totalApprovedIssues,
+    totalRejectedIssues: aggregated.totalRejectedIssues,
+    totalTickets: aggregated.totalTickets,
     totalDurationMs: Date.now() - startTime,
-    totalCostUsd,
-    failedAgents
+    totalCostUsd: aggregated.totalCostUsd,
+    failedAgents: aggregated.failedAgents
   };
 }
 
 /**
- * Get agent IDs grouped by category for display
+ * Get agent IDs grouped by category for UI display purposes.
+ *
+ * Returns a mapping of human-readable category names to arrays of agent IDs.
+ * Useful for organizing agents in the CLI help output or selection UI.
+ *
+ * @returns Record mapping category names to agent ID arrays
+ *
+ * Categories:
+ * - **Architecture**: Code structure, dependencies, abstraction issues
+ * - **React**: React-specific patterns and anti-patterns
+ * - **Clarity**: Naming, documentation, code obviousness
+ * - **Consistency**: Style and pattern consistency
+ * - **Bugs**: Logic errors, exception handling issues
+ * - **Security**: Security vulnerabilities, config exposure
+ *
+ * @example
+ * const categories = getAgentsByCategory();
+ * // { 'Architecture': ['critical-path-scout', ...], 'React': [...], ... }
  */
 export function getAgentsByCategory(): Record<string, string[]> {
   return {

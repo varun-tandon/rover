@@ -7,6 +7,7 @@ import { Results } from './Results.js';
 import { getAgent, getAgentIds, runScanner, runVotersInParallel, runArbitrator } from '../agents/index.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { throttle } from '../utils/throttle.js';
 
 type Phase = 'init' | 'scanning' | 'voting' | 'arbitrating' | 'complete' | 'error';
 
@@ -18,31 +19,6 @@ interface AppProps {
     dryRun: boolean;
     verbose?: boolean;
   };
-}
-
-// Throttle function to limit UI updates
-function throttle<T extends (...args: Parameters<T>) => void>(
-  fn: T,
-  delay: number
-): T {
-  let lastCall = 0;
-  let timeoutId: NodeJS.Timeout | null = null;
-
-  return ((...args: Parameters<T>) => {
-    const now = Date.now();
-    const timeSinceLastCall = now - lastCall;
-
-    if (timeSinceLastCall >= delay) {
-      lastCall = now;
-      fn(...args);
-    } else if (!timeoutId) {
-      timeoutId = setTimeout(() => {
-        lastCall = Date.now();
-        timeoutId = null;
-        fn(...args);
-      }, delay - timeSinceLastCall);
-    }
-  }) as T;
 }
 
 export function App({ command, targetPath, flags }: AppProps) {
@@ -65,7 +41,8 @@ export function App({ command, targetPath, flags }: AppProps) {
   const agent = getAgent(agentId);
   const resolvedPath = targetPath ? resolve(targetPath) : process.cwd();
 
-  // Throttled message setter (update at most every 200ms)
+  // Throttled message setter - 200ms balances UI responsiveness (feels instant to users)
+  // with React render performance (avoids excessive re-renders during rapid file scanning)
   const throttledSetScanMessage = useRef(
     throttle((msg: string) => setScanMessage(msg), 200)
   ).current;
@@ -80,30 +57,29 @@ export function App({ command, targetPath, flags }: AppProps) {
     }));
   }, []);
 
-  // Track voter progress without triggering re-renders on every vote
-  const voterProgressRef = useRef<Map<string, number>>(new Map());
-  const throttledUpdateVoters = useRef(
-    throttle(() => {
-      setVoterStatuses(prev => prev.map(v => ({
-        ...v,
-        status: 'voting' as const,
-        votesCompleted: voterProgressRef.current.get(v.id) ?? v.votesCompleted
-      })));
+  // Update voter progress with throttling to avoid excessive re-renders.
+  // 300ms throttle (vs 200ms for scan messages) because voter status updates are less
+  // time-critical for user feedback and happen more frequently (3 voters x N issues).
+  const throttledIncrementVoterProgress = useRef(
+    throttle((voterId: string) => {
+      setVoterStatuses(prev => prev.map(voterStatus =>
+        voterStatus.id === voterId
+          ? { ...voterStatus, status: 'voting' as const, votesCompleted: voterStatus.votesCompleted + 1 }
+          : voterStatus
+      ));
     }, 300)
   ).current;
 
-  // Update voter progress (throttled)
+  // Callback for voter progress updates
   const updateVoterProgress = useCallback((
     voterId: string,
     _issueId: string,
     completed: boolean
   ) => {
     if (completed) {
-      const current = voterProgressRef.current.get(voterId) ?? 0;
-      voterProgressRef.current.set(voterId, current + 1);
-      throttledUpdateVoters();
+      throttledIncrementVoterProgress(voterId);
     }
-  }, [throttledUpdateVoters]);
+  }, [throttledIncrementVoterProgress]);
 
   // Main scan workflow
   useEffect(() => {
@@ -167,7 +143,7 @@ export function App({ command, targetPath, flags }: AppProps) {
         setVoterStatuses(initialStatuses);
 
         // Start all voters with 'voting' status
-        setVoterStatuses(prev => prev.map(v => ({ ...v, status: 'voting' as const })));
+        setVoterStatuses(prev => prev.map(voterStatus => ({ ...voterStatus, status: 'voting' as const })));
 
         const voterResults = await runVotersInParallel(
           resolvedPath,
@@ -178,15 +154,15 @@ export function App({ command, targetPath, flags }: AppProps) {
         );
 
         // Mark all voters as complete and collect votes
-        setVoterStatuses(prev => prev.map(v => ({
-          ...v,
+        setVoterStatuses(prev => prev.map(voterStatus => ({
+          ...voterStatus,
           status: 'completed' as const,
-          votesCompleted: v.totalVotes
+          votesCompleted: voterStatus.totalVotes
         })));
 
-        const allVotes = voterResults.flatMap(r => r.votes);
+        const allVotes = voterResults.flatMap(voterResult => voterResult.votes);
         setVotes(allVotes);
-        cost += voterResults.reduce((sum, r) => sum + r.costUsd, 0);
+        cost += voterResults.reduce((sum, voterResult) => sum + voterResult.costUsd, 0);
 
         // Phase 3: Arbitration
         setPhase('arbitrating');

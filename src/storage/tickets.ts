@@ -1,146 +1,184 @@
-import { writeFile, mkdir, readdir } from 'node:fs/promises';
+import { writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ApprovedIssue, Vote } from '../types/index.js';
+import type { ApprovedIssue, Vote, IssueSeverity } from '../types/index.js';
 import { getRoverDir } from './issues.js';
+import { countApprovals } from '../utils/votes.js';
 
 const TICKETS_DIR = 'tickets';
+const SEVERITY_FOLDERS: IssueSeverity[] = ['critical', 'high', 'medium', 'low'];
 
-/**
- * Get the path to the tickets directory
- */
-export function getTicketsDir(targetPath: string): string {
-  return join(getRoverDir(targetPath), TICKETS_DIR);
+export function getTicketsDir(targetPath: string, severity?: IssueSeverity): string {
+  const base = join(getRoverDir(targetPath), TICKETS_DIR);
+  return severity ? join(base, severity) : base;
 }
 
-/**
- * Ensure the tickets directory exists
- */
 export async function ensureTicketsDir(targetPath: string): Promise<void> {
-  const ticketsDir = getTicketsDir(targetPath);
-  if (!existsSync(ticketsDir)) {
-    await mkdir(ticketsDir, { recursive: true });
+  for (const severity of SEVERITY_FOLDERS) {
+    const severityDir = getTicketsDir(targetPath, severity);
+    if (!existsSync(severityDir)) {
+      await mkdir(severityDir, { recursive: true });
+    }
   }
 }
 
-/**
- * Generate the next ticket number
- */
 async function getNextTicketNumber(targetPath: string): Promise<number> {
-  const ticketsDir = getTicketsDir(targetPath);
+  const ticketNumbers: number[] = [];
 
-  if (!existsSync(ticketsDir)) {
-    return 1;
+  for (const severity of SEVERITY_FOLDERS) {
+    const severityDir = getTicketsDir(targetPath, severity);
+    if (!existsSync(severityDir)) continue;
+
+    try {
+      const files = await readdir(severityDir);
+      for (const f of files) {
+        if (f.startsWith('ISSUE-') && f.endsWith('.md')) {
+          const match = f.match(/ISSUE-(\d+)\.md/);
+          if (match?.[1]) {
+            const num = parseInt(match[1], 10);
+            if (!isNaN(num)) ticketNumbers.push(num);
+          }
+        }
+      }
+    } catch (error) {
+      // Log unexpected errors for debugging - readdir can fail due to permissions or filesystem issues
+      console.error(`Warning: Failed to read tickets from ${severityDir}:`, error);
+    }
   }
 
-  try {
-    const files = await readdir(ticketsDir);
-    const ticketNumbers = files
-      .filter(f => f.startsWith('ISSUE-') && f.endsWith('.md'))
-      .map(f => {
-        const match = f.match(/ISSUE-(\d+)\.md/);
-        return match?.[1] ? parseInt(match[1], 10) : 0;
-      })
-      .filter(n => !isNaN(n));
-
-    return ticketNumbers.length > 0 ? Math.max(...ticketNumbers) + 1 : 1;
-  } catch {
-    return 1;
-  }
+  return ticketNumbers.length > 0 ? Math.max(...ticketNumbers) + 1 : 1;
 }
 
-/**
- * Format a ticket number with leading zeros
- */
+// 3-digit padding supports up to 999 issues per codebase. Chosen for readability
+// in file listings while being sufficient for typical project lifespans.
 function formatTicketNumber(num: number): string {
   return `ISSUE-${num.toString().padStart(3, '0')}`;
 }
 
 /**
- * Format a vote for display in the ticket
+ * Parse a ticket number from a ticket ID string (e.g., "ISSUE-001" -> 1)
+ * Returns null if the format is invalid
  */
+export function parseTicketNumber(ticketId: string): number | null {
+  const match = ticketId.match(/^ISSUE-(\d+)$/i);
+  if (!match?.[1]) return null;
+  return parseInt(match[1], 10);
+}
+
+/**
+ * Get the path to a ticket file by ticket ID (e.g., "ISSUE-001")
+ * Searches across all severity folders
+ */
+export function getTicketPathById(targetPath: string, ticketId: string): string | null {
+  const num = parseTicketNumber(ticketId);
+  if (num === null) return null;
+  const normalizedId = formatTicketNumber(num);
+
+  for (const severity of SEVERITY_FOLDERS) {
+    const ticketPath = join(getTicketsDir(targetPath, severity), `${normalizedId}.md`);
+    if (existsSync(ticketPath)) {
+      return ticketPath;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Delete a ticket file by ticket ID.
+ * Returns true if deleted, false if file didn't exist.
+ */
+export async function deleteTicketFile(targetPath: string, ticketId: string): Promise<boolean> {
+  const ticketPath = getTicketPathById(targetPath, ticketId);
+  if (!ticketPath) return false;
+
+  if (!existsSync(ticketPath)) {
+    return false;
+  }
+
+  await unlink(ticketPath);
+  return true;
+}
+
 function formatVote(vote: Vote, index: number): string {
   const status = vote.approve ? 'Approved' : 'Rejected';
   return `- **Voter ${index + 1}**: ${status} - "${vote.reasoning}"`;
 }
 
-/**
- * Generate the markdown content for a ticket
- */
 export function generateTicketMarkdown(
   issue: ApprovedIssue,
   ticketId: string
 ): string {
-  const lines: string[] = [];
+  const markdownLines: string[] = [];
 
   // Header
-  lines.push(`# ${ticketId}: ${issue.title}`);
-  lines.push('');
+  markdownLines.push(`# ${ticketId}: ${issue.title}`);
+  markdownLines.push('');
 
   // Metadata
-  lines.push(`**Severity**: ${issue.severity.charAt(0).toUpperCase() + issue.severity.slice(1)}`);
-  lines.push(`**Category**: ${issue.category}`);
-  lines.push(`**Detected by**: ${issue.agentId}`);
+  markdownLines.push(`**Severity**: ${issue.severity.charAt(0).toUpperCase() + issue.severity.slice(1)}`);
+  markdownLines.push(`**Category**: ${issue.category}`);
+  markdownLines.push(`**Detected by**: ${issue.agentId}`);
 
   // File location
   if (issue.lineRange) {
-    lines.push(`**File**: \`${issue.filePath}:${issue.lineRange.start}-${issue.lineRange.end}\``);
+    markdownLines.push(`**File**: \`${issue.filePath}:${issue.lineRange.start}-${issue.lineRange.end}\``);
   } else {
-    lines.push(`**File**: \`${issue.filePath}\``);
+    markdownLines.push(`**File**: \`${issue.filePath}\``);
   }
 
-  lines.push('');
+  markdownLines.push('');
 
   // Description
-  lines.push('## Description');
-  lines.push('');
-  lines.push(issue.description);
-  lines.push('');
+  markdownLines.push('## Description');
+  markdownLines.push('');
+  markdownLines.push(issue.description);
+  markdownLines.push('');
 
   // Code snippet if available
   if (issue.codeSnippet) {
-    lines.push('## Problematic Code');
-    lines.push('');
-    lines.push('```typescript');
-    lines.push(issue.codeSnippet);
-    lines.push('```');
-    lines.push('');
+    markdownLines.push('## Problematic Code');
+    markdownLines.push('');
+    markdownLines.push('```typescript');
+    markdownLines.push(issue.codeSnippet);
+    markdownLines.push('```');
+    markdownLines.push('');
   }
 
   // Recommendation
-  lines.push('## Recommendation');
-  lines.push('');
-  lines.push(issue.recommendation);
-  lines.push('');
+  markdownLines.push('## Recommendation');
+  markdownLines.push('');
+  markdownLines.push(issue.recommendation);
+  markdownLines.push('');
 
   // Voting summary
-  lines.push('## Voting Summary');
-  lines.push('');
+  markdownLines.push('## Voting Summary');
+  markdownLines.push('');
 
-  const approveCount = issue.votes.filter(v => v.approve).length;
+  const approveCount = countApprovals(issue.votes);
   const totalVotes = issue.votes.length;
-  lines.push(`**Result**: ${approveCount}/${totalVotes} votes to approve`);
-  lines.push('');
+  markdownLines.push(`**Result**: ${approveCount}/${totalVotes} votes to approve`);
+  markdownLines.push('');
 
   for (let i = 0; i < issue.votes.length; i++) {
     const vote = issue.votes[i];
     if (vote) {
-      lines.push(formatVote(vote, i));
+      markdownLines.push(formatVote(vote, i));
     }
   }
 
-  lines.push('');
+  markdownLines.push('');
 
   // Footer
-  lines.push('---');
+  markdownLines.push('---');
   const date = new Date(issue.approvedAt).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric'
   });
-  lines.push(`*Generated by Rover on ${date}*`);
+  markdownLines.push(`*Generated by Rover on ${date}*`);
 
-  return lines.join('\n');
+  return markdownLines.join('\n');
 }
 
 /**
@@ -166,7 +204,7 @@ export async function createTicketFile(
 
   const ticketNum = await getNextTicketNumber(targetPath);
   const ticketId = formatTicketNumber(ticketNum);
-  const ticketPath = join(getTicketsDir(targetPath), `${ticketId}.md`);
+  const ticketPath = join(getTicketsDir(targetPath, issue.severity), `${ticketId}.md`);
 
   // Create a new issue object with ticketPath set (no mutation)
   const updatedIssue: ApprovedIssue = {
@@ -211,22 +249,26 @@ export async function createTicketFiles(
 }
 
 /**
- * Get all existing ticket files
+ * Get all existing ticket files from all severity folders
  */
 export async function getExistingTickets(targetPath: string): Promise<string[]> {
-  const ticketsDir = getTicketsDir(targetPath);
+  const allTickets: string[] = [];
 
-  if (!existsSync(ticketsDir)) {
-    return [];
+  for (const severity of SEVERITY_FOLDERS) {
+    const severityDir = getTicketsDir(targetPath, severity);
+    if (!existsSync(severityDir)) continue;
+
+    try {
+      const files = await readdir(severityDir);
+      const tickets = files
+        .filter(f => f.startsWith('ISSUE-') && f.endsWith('.md'))
+        .map(f => join(severityDir, f));
+      allTickets.push(...tickets);
+    } catch (error) {
+      // Log unexpected errors for debugging - readdir can fail due to permissions or filesystem issues
+      console.error(`Warning: Failed to read tickets from ${severityDir}:`, error);
+    }
   }
 
-  try {
-    const files = await readdir(ticketsDir);
-    return files
-      .filter(f => f.startsWith('ISSUE-') && f.endsWith('.md'))
-      .sort()
-      .map(f => join(ticketsDir, f));
-  } catch {
-    return [];
-  }
+  return allTickets.sort();
 }

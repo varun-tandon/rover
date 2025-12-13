@@ -5,7 +5,19 @@ import { getAgent } from './definitions/index.js';
 import { summarizeExistingIssues } from '../storage/issues.js';
 
 /**
- * Run the scanner agent to detect issues in the codebase
+ * Run the scanner agent to detect issues in the codebase.
+ *
+ * Uses an AI agent to explore the codebase according to agent-specific guidelines,
+ * identifying code quality issues, architectural problems, and potential improvements.
+ *
+ * @param options - Configuration for the scan
+ * @param options.targetPath - Absolute path to the directory to scan
+ * @param options.agentId - ID of the agent definition to use (determines scan focus)
+ * @param options.existingIssues - Summaries of previously detected issues for deduplication
+ * @param options.onProgress - Optional callback for real-time progress updates
+ * @returns Scan results including detected issues, timing, and cost information
+ * @throws Error if the specified agent ID is not found
+ * @throws Error if the underlying AI query fails (network issues, API errors)
  */
 export async function runScanner(options: ScannerOptions): Promise<ScannerResult> {
   const { targetPath, agentId, onProgress } = options;
@@ -100,9 +112,9 @@ Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
         // Try to extract JSON from the result
         const jsonMatch = resultText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]) as { issues?: unknown[] };
-          if (Array.isArray(parsed.issues)) {
-            issues = parsed.issues.map((issue, index) => ({
+          const parsedScannerOutput = JSON.parse(jsonMatch[0]) as { issues?: unknown[] };
+          if (Array.isArray(parsedScannerOutput.issues)) {
+            issues = parsedScannerOutput.issues.map((issue, index) => ({
               id: (issue as { id?: string }).id ?? `issue-${index}`,
               agentId,
               title: (issue as { title?: string }).title ?? 'Unknown Issue',

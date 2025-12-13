@@ -50,7 +50,21 @@ export interface ScannerOptions {
   agentId: string;
   /** Existing issues summary for deduplication */
   existingIssues: IssueSummary[];
-  /** Callback for progress updates */
+  /**
+   * Callback for progress updates during scanning.
+   *
+   * Called by `runScanner` at various stages:
+   * - When summarizing existing issues for deduplication
+   * - When starting the scan
+   * - When searching for files (Glob tool)
+   * - When reading files (Read tool)
+   * - When searching for patterns (Grep tool)
+   * - On scan completion or error
+   *
+   * Used to display real-time progress in the terminal UI.
+   *
+   * @param message - Human-readable description of current activity
+   */
   onProgress?: (message: string) => void;
 }
 
@@ -66,7 +80,18 @@ export interface VoterOptions {
   agentId: string;
   /** Candidate issues to vote on */
   issues: CandidateIssue[];
-  /** Callback for progress updates */
+  /**
+   * Callback for progress updates during voting.
+   *
+   * Called by `runVoter` before and after voting on each issue:
+   * - Before voting: `onProgress(issueId, false)` - voting about to start
+   * - After voting: `onProgress(issueId, true)` - vote cast (approve or reject)
+   *
+   * Used to track real-time voting progress in the terminal UI.
+   *
+   * @param issueId - The ID of the issue being voted on
+   * @param completed - Whether the vote for this issue has been cast
+   */
   onProgress?: (issueId: string, completed: boolean) => void;
 }
 

@@ -2,7 +2,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
-import type { IssueStore, ApprovedIssue, IssueSummary } from '../types/index.js';
+import type { IssueStore, ApprovedIssue, IssueSummary, IssueSeverity } from '../types/index.js';
+import { deleteTicketFile, parseTicketNumber } from './tickets.js';
 
 const STORE_VERSION = '1.0.0';
 const ROVER_DIR = '.rover';
@@ -16,23 +17,14 @@ const ISSUES_FILE = 'issues.json';
  */
 const LLM_SUMMARIZATION_THRESHOLD = 5;
 
-/**
- * Get the path to the .rover directory for a target path
- */
 export function getRoverDir(targetPath: string): string {
   return join(targetPath, ROVER_DIR);
 }
 
-/**
- * Get the path to the issues.json file
- */
 export function getIssuesPath(targetPath: string): string {
   return join(getRoverDir(targetPath), ISSUES_FILE);
 }
 
-/**
- * Create an empty issue store
- */
 function createEmptyStore(): IssueStore {
   return {
     version: STORE_VERSION,
@@ -41,9 +33,6 @@ function createEmptyStore(): IssueStore {
   };
 }
 
-/**
- * Ensure the .rover directory exists
- */
 export async function ensureRoverDir(targetPath: string): Promise<void> {
   const roverDir = getRoverDir(targetPath);
   if (!existsSync(roverDir)) {
@@ -51,9 +40,6 @@ export async function ensureRoverDir(targetPath: string): Promise<void> {
   }
 }
 
-/**
- * Load the issue store from disk
- */
 export async function loadIssueStore(targetPath: string): Promise<IssueStore> {
   const issuesPath = getIssuesPath(targetPath);
 
@@ -71,14 +57,17 @@ export async function loadIssueStore(targetPath: string): Promise<IssueStore> {
     }
 
     return store;
-  } catch {
-    return createEmptyStore();
+  } catch (error) {
+    // Only silently return empty store for JSON parsing errors (corrupted file)
+    // Propagate filesystem errors (permissions, etc.) for debugging
+    if (error instanceof SyntaxError) {
+      console.error(`Warning: Failed to parse ${issuesPath}, starting with empty store:`, error.message);
+      return createEmptyStore();
+    }
+    throw error;
   }
 }
 
-/**
- * Save the issue store to disk
- */
 export async function saveIssueStore(
   targetPath: string,
   store: IssueStore
@@ -90,9 +79,6 @@ export async function saveIssueStore(
   await writeFile(issuesPath, content, 'utf-8');
 }
 
-/**
- * Add new approved issues to the store
- */
 export async function addApprovedIssues(
   targetPath: string,
   issues: ApprovedIssue[]
@@ -110,9 +96,6 @@ export async function addApprovedIssues(
   return store;
 }
 
-/**
- * Get summaries of existing issues for deduplication
- */
 export async function getExistingIssueSummaries(
   targetPath: string
 ): Promise<IssueSummary[]> {
@@ -126,28 +109,6 @@ export async function getExistingIssueSummaries(
   }));
 }
 
-/**
- * Format existing issues as a summary string for the scanner agent
- */
-export async function getExistingIssuesSummaryText(
-  targetPath: string
-): Promise<string> {
-  const summaries = await getExistingIssueSummaries(targetPath);
-
-  if (summaries.length === 0) {
-    return 'No existing issues detected yet.';
-  }
-
-  const lines = summaries.map(s =>
-    `- [${s.category}] ${s.title} (${s.filePath})`
-  );
-
-  return `Previously detected issues (${summaries.length} total):\n${lines.join('\n')}`;
-}
-
-/**
- * Check if an issue with similar characteristics already exists
- */
 export async function isDuplicateIssue(
   targetPath: string,
   title: string,
@@ -163,13 +124,10 @@ export async function isDuplicateIssue(
   );
 }
 
-/**
- * Get statistics about the issue store
- */
 export async function getIssueStats(targetPath: string): Promise<{
   totalIssues: number;
-  byCategory: Record<string, number>;
-  bySeverity: Record<string, number>;
+  byCategory: Partial<Record<string, number>>;
+  bySeverity: Partial<Record<IssueSeverity, number>>;
   lastScanAt: string | null;
 }> {
   const store = await loadIssueStore(targetPath);
@@ -193,6 +151,14 @@ export async function getIssueStats(targetPath: string): Promise<{
 /**
  * Use an LLM to create a condensed summary of existing issues for deduplication.
  * Groups similar issues and creates short fingerprints that scanners can check against.
+ *
+ * For small issue counts (<= 5), formats directly without LLM.
+ * For larger sets, uses Claude to intelligently compress and group issues.
+ *
+ * @param targetPath - Path to the target directory containing .rover/issues.json
+ * @returns Formatted summary string of existing issues for scanner context
+ * @throws Error if ANTHROPIC_API_KEY is not set when LLM summarization is needed
+ * @requires ANTHROPIC_API_KEY environment variable must be set for issue counts > 5
  */
 export async function summarizeExistingIssues(targetPath: string): Promise<string> {
   const store = await loadIssueStore(targetPath);
@@ -203,19 +169,22 @@ export async function summarizeExistingIssues(targetPath: string): Promise<strin
 
   // For small numbers of issues, just format them directly
   if (store.issues.length <= LLM_SUMMARIZATION_THRESHOLD) {
-    const lines = store.issues.map(issue =>
+    const summaryLines = store.issues.map(issue =>
       `- [${issue.category}] "${issue.title}" in ${issue.filePath}${issue.lineRange ? `:${issue.lineRange.start}-${issue.lineRange.end}` : ''}`
     );
-    return `Previously detected issues (${store.issues.length} total):\n${lines.join('\n')}`;
+    return `Previously detected issues (${store.issues.length} total):\n${summaryLines.join('\n')}`;
   }
 
-  // For larger sets, use LLM to create a condensed summary
+  // For larger sets, use LLM to create a condensed summary.
+  // Truncate descriptions to 200 chars to balance context preservation with token efficiency.
+  // Testing showed 200 chars captures core issue details while keeping summarization costs
+  // reasonable for large issue sets (descriptions often contain verbose code examples).
   const issueDetails = store.issues.map(issue => ({
     title: issue.title,
     file: issue.filePath,
     lines: issue.lineRange ? `${issue.lineRange.start}-${issue.lineRange.end}` : null,
     category: issue.category,
-    description: issue.description.slice(0, 200) // Truncate long descriptions
+    description: issue.description.slice(0, 200)
   }));
 
   const client = new Anthropic();
@@ -243,11 +212,87 @@ Return ONLY the condensed list, no explanations.`
   const summaryBlock = response.content.find(block => block.type === 'text');
   if (!summaryBlock || summaryBlock.type !== 'text') {
     // Fallback to simple format
-    const lines = store.issues.map(issue =>
+    const summaryLines = store.issues.map(issue =>
       `- [${issue.category}] "${issue.title}" in ${issue.filePath}`
     );
-    return `Previously detected issues (${store.issues.length} total):\n${lines.join('\n')}`;
+    return `Previously detected issues (${store.issues.length} total):\n${summaryLines.join('\n')}`;
   }
 
   return `Previously detected issues (${store.issues.length} total, summarized):\n${summaryBlock.text}`;
+}
+
+/**
+ * Result of removing issues
+ */
+export interface RemoveIssuesResult {
+  removed: string[];
+  notFound: string[];
+  errors: Array<{ ticketId: string; error: string }>;
+}
+
+/**
+ * Normalize a ticket ID to standard format (ISSUE-001)
+ */
+function normalizeTicketId(ticketId: string): string | null {
+  const num = parseTicketNumber(ticketId);
+  if (num === null) return null;
+  return `ISSUE-${num.toString().padStart(3, '0')}`;
+}
+
+/**
+ * Remove issues by their ticket IDs (e.g., "ISSUE-001", "ISSUE-002")
+ * Removes from both issues.json and deletes ticket files
+ */
+export async function removeIssues(
+  targetPath: string,
+  ticketIds: string[]
+): Promise<RemoveIssuesResult> {
+  const store = await loadIssueStore(targetPath);
+  const result: RemoveIssuesResult = {
+    removed: [],
+    notFound: [],
+    errors: []
+  };
+
+  for (const ticketId of ticketIds) {
+    const normalized = normalizeTicketId(ticketId);
+
+    if (normalized === null) {
+      result.errors.push({
+        ticketId,
+        error: `Invalid ticket ID format: ${ticketId}`
+      });
+      continue;
+    }
+
+    // Find the issue by matching ticketPath
+    const issueIndex = store.issues.findIndex(issue => {
+      const pathMatch = issue.ticketPath.match(/ISSUE-\d+\.md$/);
+      if (!pathMatch) return false;
+      const issueTicketId = pathMatch[0].replace('.md', '');
+      return issueTicketId === normalized;
+    });
+
+    if (issueIndex === -1) {
+      result.notFound.push(ticketId);
+      continue;
+    }
+
+    // Remove from store
+    store.issues.splice(issueIndex, 1);
+
+    // Delete ticket file (ignore if already deleted)
+    try {
+      await deleteTicketFile(targetPath, normalized);
+    } catch {
+      // File deletion failed but we still removed from store
+    }
+
+    result.removed.push(ticketId);
+  }
+
+  // Save updated store
+  await saveIssueStore(targetPath, store);
+
+  return result;
 }

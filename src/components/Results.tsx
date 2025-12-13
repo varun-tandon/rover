@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { ApprovedIssue, CandidateIssue } from '../types/index.js';
+import { countApprovals } from '../utils/votes.js';
 
 interface IssueCardProps {
   issue: ApprovedIssue;
@@ -23,7 +24,7 @@ function IssueCard({ issue, ticketPath }: IssueCardProps) {
     }
   };
 
-  const voteCount = issue.votes.filter(v => v.approve).length;
+  const voteCount = countApprovals(issue.votes);
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" padding={1} marginBottom={1}>

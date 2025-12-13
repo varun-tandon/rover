@@ -5,6 +5,7 @@ import { runAgentsBatched, getAgentIds } from '../agents/index.js';
 import type { BatchProgress, AgentResult, BatchRunResult } from '../agents/index.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { throttle } from '../utils/throttle.js';
 
 interface BatchAppProps {
   targetPath: string;
@@ -24,18 +25,6 @@ interface AgentStatus {
   approvedIssues: number;
 }
 
-// Throttle function
-function throttle<T extends (...args: Parameters<T>) => void>(fn: T, delay: number): T {
-  let lastCall = 0;
-  return ((...args: Parameters<T>) => {
-    const now = Date.now();
-    if (now - lastCall >= delay) {
-      lastCall = now;
-      fn(...args);
-    }
-  }) as T;
-}
-
 export function BatchApp({ targetPath, flags }: BatchAppProps) {
   const { exit } = useApp();
   const resolvedPath = targetPath ? resolve(targetPath) : process.cwd();
@@ -46,13 +35,15 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
   const [agentStatuses, setAgentStatuses] = useState<AgentStatus[]>([]);
   const [result, setResult] = useState<BatchRunResult | null>(null);
 
-  // Throttled progress update
+  // Throttled progress update - 150ms (faster than single-agent 200ms) because batch mode
+  // has less frequent updates per agent and users benefit from snappier feedback during
+  // the longer overall batch execution time.
   const throttledSetProgress = useRef(
     throttle((progress: BatchProgress) => setCurrentProgress(progress), 150)
   ).current;
 
   useEffect(() => {
-    async function run() {
+    async function runBatchScan() {
       // Validation
       if (!existsSync(resolvedPath)) {
         setError(`Target path does not exist: ${resolvedPath}`);
@@ -115,7 +106,7 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
       }
     }
 
-    run();
+    runBatchScan();
   }, [resolvedPath, flags.dryRun, flags.concurrency, throttledSetProgress, exit]);
 
   // Auto-exit
@@ -233,16 +224,16 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
             <Text bold>Results by Agent:</Text>
             <Box flexDirection="column" paddingLeft={2} marginTop={1}>
               {result.agentResults
-                .filter(r => r.scanResult.issues.length > 0 || r.arbitratorResult.approvedIssues.length > 0)
-                .map(r => (
-                  <Box key={r.agentId} gap={1}>
-                    <Text color={r.arbitratorResult.approvedIssues.length > 0 ? 'yellow' : 'gray'}>
-                      {r.arbitratorResult.approvedIssues.length > 0 ? '!' : '·'}
+                .filter(agentResult => agentResult.scanResult.issues.length > 0 || agentResult.arbitratorResult.approvedIssues.length > 0)
+                .map(agentResult => (
+                  <Box key={agentResult.agentId} gap={1}>
+                    <Text color={agentResult.arbitratorResult.approvedIssues.length > 0 ? 'yellow' : 'gray'}>
+                      {agentResult.arbitratorResult.approvedIssues.length > 0 ? '!' : '·'}
                     </Text>
-                    <Text>{r.agentName}:</Text>
+                    <Text>{agentResult.agentName}:</Text>
                     <Text dimColor>
-                      {r.scanResult.issues.length} found,{' '}
-                      <Text color="green">{r.arbitratorResult.approvedIssues.length} approved</Text>
+                      {agentResult.scanResult.issues.length} found,{' '}
+                      <Text color="green">{agentResult.arbitratorResult.approvedIssues.length} approved</Text>
                     </Text>
                   </Box>
                 ))}
