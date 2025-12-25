@@ -66,6 +66,15 @@ export function parseTicketNumber(ticketId: string): number | null {
 }
 
 /**
+ * Extract ticket ID from a ticket path (e.g., ".rover/tickets/high/ISSUE-001.md" -> "ISSUE-001")
+ * Returns null if no ticket ID found
+ */
+export function extractTicketId(ticketPath: string): string | null {
+  const match = ticketPath.match(/ISSUE-\d+/);
+  return match ? match[0] : null;
+}
+
+/**
  * Get the path to a ticket file by ticket ID (e.g., "ISSUE-001")
  * Searches across all severity folders
  */
@@ -271,4 +280,112 @@ export async function getExistingTickets(targetPath: string): Promise<string[]> 
   }
 
   return allTickets.sort();
+}
+
+/**
+ * Generate markdown for a consolidated ticket.
+ * Includes references to the original issues that were merged.
+ */
+export function generateConsolidatedTicketMarkdown(
+  issue: ApprovedIssue,
+  ticketId: string,
+  originalIds: string[]
+): string {
+  const markdownLines: string[] = [];
+
+  // Header
+  markdownLines.push(`# ${ticketId}: ${issue.title}`);
+  markdownLines.push('');
+
+  // Metadata
+  markdownLines.push(`**Severity**: ${issue.severity.charAt(0).toUpperCase() + issue.severity.slice(1)}`);
+  markdownLines.push(`**Category**: ${issue.category}`);
+  markdownLines.push(`**Consolidated from**: ${originalIds.join(', ')}`);
+
+  // File location
+  if (issue.lineRange) {
+    markdownLines.push(`**File**: \`${issue.filePath}:${issue.lineRange.start}-${issue.lineRange.end}\``);
+  } else {
+    markdownLines.push(`**File**: \`${issue.filePath}\``);
+  }
+
+  markdownLines.push('');
+
+  // Description
+  markdownLines.push('## Description');
+  markdownLines.push('');
+  markdownLines.push(issue.description);
+  markdownLines.push('');
+
+  // Code snippet if available
+  if (issue.codeSnippet) {
+    markdownLines.push('## Problematic Code');
+    markdownLines.push('');
+    markdownLines.push('```typescript');
+    markdownLines.push(issue.codeSnippet);
+    markdownLines.push('```');
+    markdownLines.push('');
+  }
+
+  // Recommendation
+  markdownLines.push('## Recommendation');
+  markdownLines.push('');
+  markdownLines.push(issue.recommendation);
+  markdownLines.push('');
+
+  // Voting summary (merged from all original issues)
+  markdownLines.push('## Voting Summary');
+  markdownLines.push('');
+
+  const approveCount = countApprovals(issue.votes);
+  const totalVotes = issue.votes.length;
+  markdownLines.push(`**Result**: ${approveCount}/${totalVotes} votes to approve (merged)`);
+  markdownLines.push('');
+
+  for (let i = 0; i < issue.votes.length; i++) {
+    const vote = issue.votes[i];
+    if (vote) {
+      markdownLines.push(formatVote(vote, i));
+    }
+  }
+
+  markdownLines.push('');
+
+  // Footer
+  markdownLines.push('---');
+  const date = new Date(issue.approvedAt).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+  markdownLines.push(`*Consolidated by Rover on ${date}*`);
+
+  return markdownLines.join('\n');
+}
+
+/**
+ * Create a consolidated ticket file for a merged issue.
+ * Includes references to the original issues that were merged.
+ */
+export async function createConsolidatedTicketFile(
+  targetPath: string,
+  issue: Omit<ApprovedIssue, 'ticketPath'>,
+  originalIds: string[]
+): Promise<CreateTicketResult> {
+  await ensureTicketsDir(targetPath);
+
+  const ticketNum = await getNextTicketNumber(targetPath);
+  const ticketId = formatTicketNumber(ticketNum);
+  const ticketPath = join(getTicketsDir(targetPath, issue.severity), `${ticketId}.md`);
+
+  // Create a new issue object with ticketPath set
+  const updatedIssue: ApprovedIssue = {
+    ...issue,
+    ticketPath
+  };
+
+  const content = generateConsolidatedTicketMarkdown(updatedIssue, ticketId, originalIds);
+  await writeFile(ticketPath, content, 'utf-8');
+
+  return { path: ticketPath, issue: updatedIssue };
 }

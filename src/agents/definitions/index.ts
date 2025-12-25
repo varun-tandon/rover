@@ -1,41 +1,70 @@
 import type { AgentDefinition } from '../../types/index.js';
 
-// Original agents
-import { criticalPathScout } from './critical-path-scout.js';
+// Architecture agents
 import { depthGauge } from './depth-gauge.js';
-import { stateDeriver } from './state-deriver.js';
 import { generalizer } from './generalizer.js';
 import { cohesionAnalyzer } from './cohesion-analyzer.js';
+import { layerPetrifier } from './layer-petrifier.js';
+import { boilerplateBuster } from './boilerplate-buster.js';
+
+// Code clarity agents
 import { obviousnessAuditor } from './obviousness-auditor.js';
 import { whyAsker } from './why-asker.js';
-import { boilerplateBuster } from './boilerplate-buster.js';
+import { namingRenovator } from './naming-renovator.js';
+import { interfaceDocumenter } from './interface-documenter.js';
+
+// Consistency agents
 import { consistencyCop } from './consistency-cop.js';
 
-// New rover agents
-import { legacyReactPurist } from './legacy-react-purist.js';
+// Bug detection agents
 import { exceptionAuditor } from './exception-auditor.js';
-import { layerPetrifier } from './layer-petrifier.js';
-import { namingRenovator } from './naming-renovator.js';
-import { securitySweeper } from './security-sweeper.js';
 import { logicDetective } from './logic-detective.js';
+
+// Config agents
 import { configCleaner } from './config-cleaner.js';
-import { interfaceDocumenter } from './interface-documenter.js';
+
+// Performance agents
+import { queryOptimizer } from './query-optimizer.js';
+import { asyncEfficiencyAuditor } from './async-efficiency-auditor.js';
+
+// Dependency agents
+import { dependencyAuditor } from './dependency-auditor.js';
+
+// Code health agents
+import { deadCodeDetector } from './dead-code-detector.js';
+import { complexityAnalyzer } from './complexity-analyzer.js';
+import { duplicationFinder } from './duplication-finder.js';
+
+// API agents
+import { apiContractValidator } from './api-contract-validator.js';
+
+// Next.js agents
+import { clientBoundaryOptimizer } from './client-boundary-optimizer.js';
+import { serverActionAuditor } from './server-action-auditor.js';
+import { dataFetchingStrategist } from './data-fetching-strategist.js';
+import { routeSegmentAnalyzer } from './route-segment-analyzer.js';
+import { nextjsAssetOptimizer } from './nextjs-asset-optimizer.js';
+import { hydrationMismatchDetector } from './hydration-mismatch-detector.js';
+import { navigationPatternEnforcer } from './navigation-pattern-enforcer.js';
+import { metadataChecker } from './metadata-checker.js';
+
+// Consolidated agents
+import { reactPatternsAuditor } from './react-patterns-auditor.js';
+import { nextjsRenderingOptimizer } from './nextjs-rendering-optimizer.js';
+import { bundlePerformanceAuditor } from './bundle-performance-auditor.js';
+import { securityAuditor } from './security-auditor.js';
+import { typescriptQualityAuditor } from './typescript-quality-auditor.js';
 
 /**
  * Registry of all available scanning agents
  */
 export const agents: Record<string, AgentDefinition> = {
-  // Code quality & architecture
-  'critical-path-scout': criticalPathScout,
+  // Architecture
   'depth-gauge': depthGauge,
   'generalizer': generalizer,
   'cohesion-analyzer': cohesionAnalyzer,
   'layer-petrifier': layerPetrifier,
   'boilerplate-buster': boilerplateBuster,
-
-  // React specific
-  'state-deriver': stateDeriver,
-  'legacy-react-purist': legacyReactPurist,
 
   // Code clarity
   'obviousness-auditor': obviousnessAuditor,
@@ -43,16 +72,47 @@ export const agents: Record<string, AgentDefinition> = {
   'naming-renovator': namingRenovator,
   'interface-documenter': interfaceDocumenter,
 
-  // Consistency & patterns
+  // Consistency
   'consistency-cop': consistencyCop,
 
-  // Error handling & bugs
+  // Bug detection
   'exception-auditor': exceptionAuditor,
   'logic-detective': logicDetective,
 
-  // Security & config
-  'security-sweeper': securitySweeper,
+  // Config
   'config-cleaner': configCleaner,
+
+  // Performance
+  'query-optimizer': queryOptimizer,
+  'async-efficiency-auditor': asyncEfficiencyAuditor,
+
+  // Dependencies
+  'dependency-auditor': dependencyAuditor,
+
+  // Code health
+  'dead-code-detector': deadCodeDetector,
+  'complexity-analyzer': complexityAnalyzer,
+  'duplication-finder': duplicationFinder,
+
+  // API
+  'api-contract-validator': apiContractValidator,
+
+  // Next.js
+  'client-boundary-optimizer': clientBoundaryOptimizer,
+  'server-action-auditor': serverActionAuditor,
+  'data-fetching-strategist': dataFetchingStrategist,
+  'route-segment-analyzer': routeSegmentAnalyzer,
+  'nextjs-asset-optimizer': nextjsAssetOptimizer,
+  'hydration-mismatch-detector': hydrationMismatchDetector,
+  'navigation-pattern-enforcer': navigationPatternEnforcer,
+  'metadata-checker': metadataChecker,
+
+  // Consolidated agents
+  'react-patterns-auditor': reactPatternsAuditor,
+  'nextjs-rendering-optimizer': nextjsRenderingOptimizer,
+  'bundle-performance-auditor': bundlePerformanceAuditor,
+  'security-auditor': securityAuditor,
+  'typescript-quality-auditor': typescriptQualityAuditor,
 };
 
 /**
@@ -78,17 +138,12 @@ export function getAllAgents(): AgentDefinition[] {
 
 // Export individual agents
 export {
-  // Code quality & architecture
-  criticalPathScout,
+  // Architecture
   depthGauge,
   generalizer,
   cohesionAnalyzer,
   layerPetrifier,
   boilerplateBuster,
-
-  // React specific
-  stateDeriver,
-  legacyReactPurist,
 
   // Code clarity
   obviousnessAuditor,
@@ -96,14 +151,45 @@ export {
   namingRenovator,
   interfaceDocumenter,
 
-  // Consistency & patterns
+  // Consistency
   consistencyCop,
 
-  // Error handling & bugs
+  // Bug detection
   exceptionAuditor,
   logicDetective,
 
-  // Security & config
-  securitySweeper,
+  // Config
   configCleaner,
+
+  // Performance
+  queryOptimizer,
+  asyncEfficiencyAuditor,
+
+  // Dependencies
+  dependencyAuditor,
+
+  // Code health
+  deadCodeDetector,
+  complexityAnalyzer,
+  duplicationFinder,
+
+  // API
+  apiContractValidator,
+
+  // Next.js
+  clientBoundaryOptimizer,
+  serverActionAuditor,
+  dataFetchingStrategist,
+  routeSegmentAnalyzer,
+  nextjsAssetOptimizer,
+  hydrationMismatchDetector,
+  navigationPatternEnforcer,
+  metadataChecker,
+
+  // Consolidated agents
+  reactPatternsAuditor,
+  nextjsRenderingOptimizer,
+  bundlePerformanceAuditor,
+  securityAuditor,
+  typescriptQualityAuditor,
 };

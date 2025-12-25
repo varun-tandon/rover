@@ -37,7 +37,7 @@ export function App({ command, targetPath, flags }: AppProps) {
   const [totalDuration, setTotalDuration] = useState(0);
   const [totalCost, setTotalCost] = useState(0);
 
-  const agentId = flags.agent ?? 'critical-path-scout';
+  const agentId = flags.agent ?? 'security-auditor';
   const agent = getAgent(agentId);
   const resolvedPath = targetPath ? resolve(targetPath) : process.cwd();
 

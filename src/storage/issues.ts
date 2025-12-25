@@ -231,6 +231,80 @@ export interface RemoveIssuesResult {
 }
 
 /**
+ * Result of ignoring issues (marking as "won't fix")
+ */
+export interface IgnoreIssuesResult {
+  ignored: string[];
+  notFound: string[];
+  errors: Array<{ ticketId: string; error: string }>;
+}
+
+/**
+ * Severity weights for priority calculation
+ */
+const SEVERITY_WEIGHTS: Record<IssueSeverity, number> = {
+  critical: 40,
+  high: 30,
+  medium: 20,
+  low: 10
+};
+
+/**
+ * Select the top priority issues from a list.
+ * Priority is calculated as: severityWeight * 10 + approvalVotes
+ *
+ * @param issues - Issues to select from
+ * @param count - Number of issues to select (default: 10)
+ * @returns Top priority issues sorted by priority descending
+ */
+export function selectTopPriorityIssues(
+  issues: ApprovedIssue[],
+  count: number = 10
+): ApprovedIssue[] {
+  return [...issues]
+    .sort((a, b) => {
+      const scoreA = SEVERITY_WEIGHTS[a.severity] + a.votes.filter(v => v.approve).length;
+      const scoreB = SEVERITY_WEIGHTS[b.severity] + b.votes.filter(v => v.approve).length;
+      return scoreB - scoreA;
+    })
+    .slice(0, count);
+}
+
+/**
+ * Consolidate multiple issues into a single issue.
+ * Atomically removes the original issues and adds the consolidated one.
+ *
+ * @param targetPath - Path to the target directory
+ * @param originalIds - Ticket IDs of issues to remove (e.g., "ISSUE-001")
+ * @param consolidated - The new consolidated issue to add
+ * @returns Updated issue store
+ */
+export async function consolidateIssues(
+  targetPath: string,
+  originalIds: string[],
+  consolidated: ApprovedIssue
+): Promise<IssueStore> {
+  const store = await loadIssueStore(targetPath);
+
+  // Normalize and find issues to remove
+  const normalizedIds = originalIds.map(id => normalizeTicketId(id)).filter((id): id is string => id !== null);
+
+  // Remove original issues
+  store.issues = store.issues.filter(issue => {
+    const ticketId = issue.ticketPath.match(/ISSUE-\d+\.md$/)?.[0]?.replace('.md', '');
+    return !ticketId || !normalizedIds.includes(ticketId);
+  });
+
+  // Add consolidated issue
+  store.issues.push(consolidated);
+  store.lastScanAt = new Date().toISOString();
+
+  await saveIssueStore(targetPath, store);
+
+  return store;
+}
+
+/**
  * Normalize a ticket ID to standard format (ISSUE-001)
  */
 function normalizeTicketId(ticketId: string): string | null {
@@ -289,6 +363,56 @@ export async function removeIssues(
     }
 
     result.removed.push(ticketId);
+  }
+
+  // Save updated store
+  await saveIssueStore(targetPath, store);
+
+  return result;
+}
+
+/**
+ * Mark issues as "won't fix" by their ticket IDs (e.g., "ISSUE-001", "ISSUE-002")
+ * Issues remain in the store (for deduplication) but are hidden from the default list
+ */
+export async function ignoreIssues(
+  targetPath: string,
+  ticketIds: string[]
+): Promise<IgnoreIssuesResult> {
+  const store = await loadIssueStore(targetPath);
+  const result: IgnoreIssuesResult = {
+    ignored: [],
+    notFound: [],
+    errors: []
+  };
+
+  for (const ticketId of ticketIds) {
+    const normalized = normalizeTicketId(ticketId);
+
+    if (normalized === null) {
+      result.errors.push({
+        ticketId,
+        error: `Invalid ticket ID format: ${ticketId}`
+      });
+      continue;
+    }
+
+    // Find the issue by matching ticketPath
+    const issue = store.issues.find(i => {
+      const pathMatch = i.ticketPath.match(/ISSUE-\d+\.md$/);
+      if (!pathMatch) return false;
+      const issueTicketId = pathMatch[0].replace('.md', '');
+      return issueTicketId === normalized;
+    });
+
+    if (!issue) {
+      result.notFound.push(ticketId);
+      continue;
+    }
+
+    // Mark as won't fix
+    issue.status = 'wont_fix';
+    result.ignored.push(ticketId);
   }
 
   // Save updated store

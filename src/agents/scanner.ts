@@ -3,6 +3,7 @@ import type { CandidateIssue } from '../types/index.js';
 import type { ScannerResult, ScannerOptions } from './types.js';
 import { getAgent } from './definitions/index.js';
 import { summarizeExistingIssues } from '../storage/issues.js';
+import { loadMemory } from '../storage/memory.js';
 
 /**
  * Run the scanner agent to detect issues in the codebase.
@@ -30,17 +31,24 @@ export async function runScanner(options: ScannerOptions): Promise<ScannerResult
   onProgress?.('Summarizing existing issues for deduplication...');
   const existingIssuesSummary = await summarizeExistingIssues(targetPath);
 
+  onProgress?.('Loading memory...');
+  const memoryContent = await loadMemory(targetPath);
+
   onProgress?.(`Starting scan with ${agentDef.name}...`);
 
   const startTime = Date.now();
   let totalCost = 0;
   let issues: CandidateIssue[] = [];
 
+  const memorySection = memoryContent
+    ? `\nKNOWN ISSUES TO IGNORE:\n${memoryContent}\n\nThese are intentionally ignored issues or false positives. Do NOT report issues that match these descriptions.\n`
+    : '';
+
   const prompt = `You are scanning the codebase at the current working directory.
 
 EXISTING ISSUES (DO NOT DUPLICATE THESE):
 ${existingIssuesSummary}
-
+${memorySection}
 SCANNING GUIDELINES:
 ${agentDef.systemPrompt}
 

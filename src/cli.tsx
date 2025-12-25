@@ -1,47 +1,184 @@
 #!/usr/bin/env node
+
+// Increase max listeners to handle concurrent agent queries.
+// Each agent spawns multiple query() calls that add exit listeners.
+// With 4 concurrent agents × 4 parallel queries = 16+ listeners needed.
+process.setMaxListeners(50);
+
 import React from 'react';
 import { render } from 'ink';
 import meow from 'meow';
+import { createInterface } from 'node:readline';
+import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { execSync } from 'node:child_process';
 import { App } from './components/App.js';
 import { BatchApp } from './components/BatchApp.js';
 import { IssuesList } from './components/IssuesList.js';
+import { ConsolidateApp } from './components/ConsolidateApp.js';
 import { getAgentIds, getAllAgents } from './agents/index.js';
-import { removeIssues } from './storage/issues.js';
+import { runPlanner } from './agents/planner.js';
+import { loadIssueStore, removeIssues, ignoreIssues, selectTopPriorityIssues } from './storage/issues.js';
+import { getTicketPathById, extractTicketId } from './storage/tickets.js';
+import { appendMemory } from './storage/memory.js';
+import { loadRunState, isRunIncomplete, clearRunState } from './storage/run-state.js';
+import { buildWorkPlan, savePlan } from './storage/plans.js';
+
+/**
+ * Prompt the user with a yes/no question via readline
+ */
+async function promptYesNo(question: string): Promise<boolean> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise((resolvePromise) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      const normalized = answer.toLowerCase().trim();
+      resolvePromise(normalized === 'y' || normalized === 'yes');
+    });
+  });
+}
 
 const cli = meow(`
+  Scans use a 3-phase AI pipeline: (1) A scanner agent analyzes the codebase and
+  proposes issues, (2) Three voter agents independently evaluate each proposed
+  issue, (3) An arbitrator tallies votes and creates tickets for approved issues
+  (requires 2+ votes to pass).
+
   Usage
     $ rover <command> [options]
 
   Commands
-    scan <path>           Scan a codebase for issues
-    agents                List available scanning agents
-    issues                List stored issues with filtering
-    issues remove <ids>   Remove issues by ticket ID
+    scan <path>           Run AI agents to scan a codebase and create issue tickets
+    consolidate [path]    Find and merge duplicate/related issues using AI
+    plan [path]           Generate prioritized work plan with dependency graph
+    agents                List all available scanning agents with descriptions
+    issues                List, view, copy, or remove stored issue tickets
+    remember <text>       Store context in memory to help agents ignore known issues
 
-  Options
-    --all           Run ALL agents (4 in parallel by default)
-    --agent, -a     Run a specific agent (default: critical-path-scout)
-    --concurrency   Max agents to run in parallel (default: 4)
-    --dry-run       Show what would be scanned without running
-    --verbose       Enable verbose output
-    --severity, -s  Filter issues by severity (e.g., high or high,critical)
-    --help          Show this help message
-    --version       Show version number
+  SCANNING
+    The scan command runs one or more AI agents against your codebase. Each agent
+    specializes in detecting specific types of issues (security, performance,
+    React anti-patterns, etc.). Issues found are validated by voter agents before
+    being saved as tickets.
 
-  Examples
-    $ rover scan ./my-project                    # Run default agent
-    $ rover scan ./my-project --all              # Run ALL 17 agents
-    $ rover scan ./my-project --agent=security-sweeper
-    $ rover scan ./my-project --all --concurrency=2
-    $ rover agents
-    $ rover issues                               # List all stored issues
-    $ rover issues --severity high,critical      # Filter by severity
-    $ rover issues remove ISSUE-001              # Remove a single issue
-    $ rover issues remove ISSUE-001 ISSUE-002    # Remove multiple issues
+    Options:
+      --all             Run ALL 33 agents (recommended for thorough analysis)
+      --agent, -a       Run a specific agent by ID (default: security-auditor)
+      --concurrency     Agents to run in parallel with --all (default: 4)
+      --dry-run         Preview what would be scanned without running
+      --verbose         Show detailed output during scan
 
-  Output
-    Issues are saved to .rover/tickets/ as individual Markdown files.
-    Issue history is stored in .rover/issues.json for deduplication.
+    Examples:
+      $ rover scan ./my-project                 # Scan with default agent
+      $ rover scan ./my-project --all           # Full scan with all 33 agents
+      $ rover scan . -a dead-code-detector      # Run specific agent on cwd
+      $ rover scan ./app --all --concurrency=2  # Slower but uses less resources
+
+    Batch runs with --all can be resumed if interrupted. If a previous run was
+    incomplete, rover will prompt to resume or start fresh.
+
+  MANAGING ISSUES
+    Issues are stored in .rover/tickets/ as Markdown files (ISSUE-001.md, etc.).
+    Each ticket includes: title, severity, description, affected files with line
+    numbers, and suggested fixes.
+
+    Subcommands:
+      issues                  List all issues (shows ID, severity, title)
+      issues view <id>        Print full issue content to stdout
+      issues copy <id>        Copy issue content to clipboard (macOS)
+      issues remove <id>...   Delete issues by ID (removes ticket and history)
+      issues ignore <id>...   Mark issues as "won't fix" (hides but prevents re-detection)
+
+    Options:
+      --severity, -s    Filter by severity: low, medium, high, critical
+                        Can be comma-separated: --severity high,critical
+      --all             Include ignored ("won't fix") issues in the list
+
+    Examples:
+      $ rover issues                            # List all issues
+      $ rover issues --severity critical        # Show only critical issues
+      $ rover issues --all                      # Include ignored issues
+      $ rover issues view ISSUE-042             # View issue details
+      $ rover issues copy ISSUE-042             # Copy to clipboard for sharing
+      $ rover issues remove ISSUE-001 ISSUE-002 # Remove resolved issues
+      $ rover issues ignore ISSUE-003           # Mark as "won't fix"
+
+  CONSOLIDATION
+    The consolidate command analyzes existing issues and merges duplicates or
+    closely related issues into single comprehensive tickets. Uses AI to
+    intelligently combine descriptions, recommendations, and context.
+
+    Options:
+      --dry-run             Preview what would be consolidated without making changes
+      --concurrency         Clusters to process in parallel (default: 4)
+
+    Examples:
+      $ rover consolidate                    # Consolidate in current directory
+      $ rover consolidate ./my-project       # Consolidate in specific path
+      $ rover consolidate --dry-run          # Preview consolidation
+      $ rover consolidate --concurrency=2    # Process 2 clusters at a time
+
+  PLANNING
+    The plan command selects the top 10 highest priority issues and analyzes
+    their dependencies to create a work plan. Outputs a Mermaid diagram showing
+    which issues can be worked on in parallel and which have dependencies.
+
+    The plan is saved to .rover/plans/ as a markdown file with:
+    - Priority issue table
+    - Dependency analysis summary
+    - Mermaid flowchart diagram
+    - Recommended execution order
+    - Parallel workstream assignments
+
+    Examples:
+      $ rover plan                           # Plan for current directory
+      $ rover plan ./my-project              # Plan for specific path
+
+  MEMORY
+    The remember command adds entries to .rover/memory.md. Memory is included in
+    agent prompts to provide context about intentional decisions, known issues,
+    or patterns that should not be flagged. Use this to reduce false positives.
+
+    Examples:
+      $ rover remember "Using 'any' type in api-client.ts is intentional for dynamic responses"
+      $ rover remember "Large bundle size in analytics.ts is acceptable - vendor SDK"
+      $ rover remember "Duplicate code in adapters/ is intentional for isolation"
+
+  AGENTS
+    Rover includes 33 specialized scanning agents organized by category:
+
+    Architecture (5):    depth-gauge, generalizer, cohesion-analyzer,
+                         layer-petrifier, boilerplate-buster
+    Code Clarity (4):    obviousness-auditor, why-asker, naming-renovator,
+                         interface-documenter
+    Consistency (1):     consistency-cop
+    Bug Detection (2):   exception-auditor, logic-detective
+    Config (1):          config-cleaner
+    Performance (2):     query-optimizer, async-efficiency-auditor
+    Dependencies (1):    dependency-auditor
+    Code Health (3):     dead-code-detector, complexity-analyzer, duplication-finder
+    API (1):             api-contract-validator
+    Security (1):        security-auditor
+    TypeScript (1):      typescript-quality-auditor
+    React (1):           react-patterns-auditor
+    Next.js (10):        client-boundary-optimizer, server-action-auditor,
+                         data-fetching-strategist, route-segment-analyzer,
+                         nextjs-asset-optimizer, nextjs-rendering-optimizer,
+                         hydration-mismatch-detector, navigation-pattern-enforcer,
+                         metadata-checker, bundle-performance-auditor
+
+    Run "rover agents" to see full descriptions of each agent.
+
+  OUTPUT FILES
+    .rover/tickets/         Individual issue Markdown files (ISSUE-XXX.md)
+    .rover/issues.json      Issue history for deduplication across runs
+    .rover/memory.md        User-provided context for agents
+    .rover/run-state.json   Tracks batch run progress for resume capability
+    .rover/plans/           Work plans with Mermaid dependency diagrams
 `, {
   importMeta: import.meta,
   flags: {
@@ -73,6 +210,109 @@ const cli = meow(`
 });
 
 const [command, targetPath] = cli.input;
+
+// Handle 'remember' command
+if (command === 'remember') {
+  const description = cli.input.slice(1).join(' ');
+  const rememberTargetPath = process.cwd();
+
+  if (!description.trim()) {
+    console.error('Error: Please provide a description of what to remember.');
+    console.error('Usage: rover remember "description of issue to ignore"');
+    process.exit(1);
+  }
+
+  (async () => {
+    try {
+      await appendMemory(rememberTargetPath, description);
+      console.log('Added to memory:', description);
+      console.log('Location: .rover/memory.md');
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  })();
+}
+
+// Handle 'consolidate' command
+if (command === 'consolidate') {
+  const consolidateTargetPath = targetPath ?? process.cwd();
+
+  render(
+    <ConsolidateApp
+      targetPath={consolidateTargetPath}
+      flags={{
+        dryRun: cli.flags.dryRun,
+        verbose: cli.flags.verbose,
+        concurrency: cli.flags.concurrency
+      }}
+    />
+  );
+}
+
+// Handle 'plan' command
+if (command === 'plan') {
+  const planTargetPath = targetPath ?? process.cwd();
+  const resolvedPlanPath = resolve(planTargetPath);
+
+  (async () => {
+    try {
+      console.log('\nRover - Work Planning');
+      console.log('=====================\n');
+
+      // Load issues
+      console.log('Loading issues from .rover/issues.json...');
+      const store = await loadIssueStore(resolvedPlanPath);
+
+      // Filter out ignored issues
+      const activeIssues = store.issues.filter(i => i.status !== 'wont_fix');
+      const ignoredCount = store.issues.length - activeIssues.length;
+
+      if (activeIssues.length === 0) {
+        console.error('No issues found. Run "rover scan" first.');
+        process.exit(1);
+      }
+
+      console.log(`Found ${activeIssues.length} issues total.${ignoredCount > 0 ? ` (${ignoredCount} ignored)` : ''}\n`);
+
+      // Select top priority
+      const topIssues = selectTopPriorityIssues(activeIssues, 10);
+      console.log(`Selecting top ${topIssues.length} priority issues:`);
+      topIssues.forEach((issue, i) => {
+        const ticketId = extractTicketId(issue.ticketPath) ?? issue.id;
+        console.log(`  ${i + 1}. [${issue.severity.toUpperCase()}] ${ticketId}: ${issue.title}`);
+      });
+
+      console.log('\nAnalyzing dependencies with AI...');
+
+      // Run planner
+      const result = await runPlanner({
+        targetPath: resolvedPlanPath,
+        issues: topIssues,
+        onProgress: (msg) => console.log(`  ${msg}`)
+      });
+
+      // Generate and save plan
+      const plan = buildWorkPlan(topIssues, result.analysis);
+      const outputPath = await savePlan(resolvedPlanPath, plan);
+
+      console.log(`\nPlan generated successfully!`);
+      console.log(`Output: ${outputPath}\n`);
+
+      // Summary
+      console.log('Summary:');
+      console.log(`  - ${result.analysis.parallelGroups.length} parallel workstream(s) identified`);
+      console.log(`  - ${result.analysis.dependencies.length} dependency/conflict(s) found`);
+      console.log(`  - Cost: $${result.costUsd.toFixed(4)}`);
+      console.log(`  - Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
+
+      process.exit(0);
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  })();
+}
 
 // Handle 'agents' command separately
 if (command === 'agents') {
@@ -136,6 +376,122 @@ if (command === 'issues') {
         process.exit(1);
       }
     })();
+  } else if (subcommand === 'ignore') {
+    // Handle 'issues ignore' subcommand
+    const ticketIds = cli.input.slice(2);
+    const issuesTargetPath = process.cwd();
+
+    if (ticketIds.length === 0) {
+      console.error('Error: Please provide at least one ticket ID to ignore.');
+      console.error('Usage: rover issues ignore ISSUE-001 [ISSUE-002 ...]');
+      process.exit(1);
+    }
+
+    // Validate ticket ID format
+    const invalidIds = ticketIds.filter(id => !/^ISSUE-\d+$/i.test(id));
+    if (invalidIds.length > 0) {
+      console.error(`Error: Invalid ticket ID format: ${invalidIds.join(', ')}`);
+      console.error('Expected format: ISSUE-XXX (e.g., ISSUE-001, ISSUE-042)');
+      process.exit(1);
+    }
+
+    // Perform ignore (async IIFE to properly await)
+    (async () => {
+      try {
+        const result = await ignoreIssues(issuesTargetPath, ticketIds);
+
+        if (result.ignored.length > 0) {
+          console.log(`Ignored ${result.ignored.length} issue(s): ${result.ignored.join(', ')}`);
+          console.log('These issues will be hidden from "rover issues" but won\'t be re-detected.');
+          console.log('Use "rover issues --all" to see ignored issues.');
+        }
+
+        if (result.notFound.length > 0) {
+          console.warn(`Not found: ${result.notFound.join(', ')}`);
+        }
+
+        if (result.errors.length > 0) {
+          for (const { ticketId, error } of result.errors) {
+            console.error(`Error ignoring ${ticketId}: ${error}`);
+          }
+          process.exit(1);
+        }
+
+        process.exit(result.notFound.length > 0 && result.ignored.length === 0 ? 1 : 0);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
+      }
+    })();
+  } else if (subcommand === 'view') {
+    // Handle 'issues view' subcommand
+    const ticketId = cli.input[2];
+    const issuesTargetPath = process.cwd();
+
+    if (!ticketId) {
+      console.error('Error: Please provide a ticket ID to view.');
+      console.error('Usage: rover issues view ISSUE-001');
+      process.exit(1);
+    }
+
+    // Validate ticket ID format
+    if (!/^ISSUE-\d+$/i.test(ticketId)) {
+      console.error(`Error: Invalid ticket ID format: ${ticketId}`);
+      console.error('Expected format: ISSUE-XXX (e.g., ISSUE-001, ISSUE-042)');
+      process.exit(1);
+    }
+
+    (async () => {
+      try {
+        const ticketPath = getTicketPathById(issuesTargetPath, ticketId);
+        if (!ticketPath) {
+          console.error(`Error: Issue ${ticketId.toUpperCase()} not found.`);
+          process.exit(1);
+        }
+
+        const content = await readFile(ticketPath, 'utf-8');
+        console.log(content);
+        process.exit(0);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
+      }
+    })();
+  } else if (subcommand === 'copy') {
+    // Handle 'issues copy' subcommand
+    const ticketId = cli.input[2];
+    const issuesTargetPath = process.cwd();
+
+    if (!ticketId) {
+      console.error('Error: Please provide a ticket ID to copy.');
+      console.error('Usage: rover issues copy ISSUE-001');
+      process.exit(1);
+    }
+
+    // Validate ticket ID format
+    if (!/^ISSUE-\d+$/i.test(ticketId)) {
+      console.error(`Error: Invalid ticket ID format: ${ticketId}`);
+      console.error('Expected format: ISSUE-XXX (e.g., ISSUE-001, ISSUE-042)');
+      process.exit(1);
+    }
+
+    (async () => {
+      try {
+        const ticketPath = getTicketPathById(issuesTargetPath, ticketId);
+        if (!ticketPath) {
+          console.error(`Error: Issue ${ticketId.toUpperCase()} not found.`);
+          process.exit(1);
+        }
+
+        const content = await readFile(ticketPath, 'utf-8');
+        execSync('pbcopy', { input: content });
+        console.log(`Copied ${ticketId.toUpperCase()} to clipboard.`);
+        process.exit(0);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
+      }
+    })();
   } else {
     // List issues (default behavior)
     const issuesTargetPath = targetPath ?? process.cwd();
@@ -158,6 +514,7 @@ if (command === 'issues') {
       <IssuesList
         targetPath={issuesTargetPath}
         severityFilter={severityFilter}
+        showIgnored={cli.flags.all}
       />
     );
   }
@@ -170,6 +527,12 @@ if (!command) {
   cli.showHelp();
   process.exit(0);
 } else if (command === 'issues') {
+  // Already handled above, async IIFE is running
+} else if (command === 'remember') {
+  // Already handled above, async IIFE is running
+} else if (command === 'consolidate') {
+  // Already handled above, React component is rendering
+} else if (command === 'plan') {
   // Already handled above, async IIFE is running
 } else if (command === 'scan') {
   if (!targetPath) {
@@ -190,16 +553,51 @@ if (!command) {
 
   // Use BatchApp for --all, App for single agent
   if (cli.flags.all) {
-    render(
-      <BatchApp
-        targetPath={targetPath}
-        flags={{
-          all: true,
-          concurrency: cli.flags.concurrency,
-          dryRun: cli.flags.dryRun
-        }}
-      />
-    );
+    // Check for incomplete run state and prompt for resume
+    (async () => {
+      const resolvedPath = resolve(targetPath);
+      let shouldResume = false;
+
+      try {
+        const existingState = await loadRunState(resolvedPath);
+
+        if (existingState && isRunIncomplete(existingState)) {
+          const completedCount = existingState.agents.filter(a => a.status === 'completed').length;
+          const totalCount = existingState.agents.length;
+
+          if (existingState.isStale) {
+            console.log(`Found stale incomplete run (${completedCount}/${totalCount} agents, started ${existingState.startedAt})`);
+            console.log('Starting fresh run...\n');
+            await clearRunState(resolvedPath);
+          } else {
+            console.log(`Found incomplete batch run: ${completedCount}/${totalCount} agents completed`);
+            shouldResume = await promptYesNo('Resume previous run? (y/n): ');
+
+            if (!shouldResume) {
+              console.log('Starting fresh run...\n');
+              await clearRunState(resolvedPath);
+            } else {
+              console.log('Resuming...\n');
+            }
+          }
+        }
+      } catch (err) {
+        // If there's an error loading state, just start fresh
+        console.error(`Warning: Could not check for previous run state: ${err instanceof Error ? err.message : err}`);
+      }
+
+      render(
+        <BatchApp
+          targetPath={targetPath}
+          flags={{
+            all: true,
+            concurrency: cli.flags.concurrency,
+            dryRun: cli.flags.dryRun,
+            resume: shouldResume
+          }}
+        />
+      );
+    })();
   } else {
     render(
       <App

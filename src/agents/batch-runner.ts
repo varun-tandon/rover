@@ -5,6 +5,7 @@ import { runScanner } from './scanner.js';
 import { runVotersInParallel } from './voter.js';
 import { runArbitrator } from './arbitrator.js';
 import { getExistingIssueSummaries } from '../storage/issues.js';
+import type { AgentRunStatus, AgentResultSummary } from '../storage/run-state.js';
 
 /**
  * Progress update during batch agent execution.
@@ -65,6 +66,8 @@ export interface BatchRunResult {
   totalCostUsd: number;
   /** Number of agents that failed during execution */
   failedAgents: number;
+  /** Number of agents skipped (already completed in resumed run) */
+  skippedAgents: number;
 }
 
 // MAX_RETRIES = 2: Balances reliability with API costs. Testing showed transient errors
@@ -214,18 +217,32 @@ export async function runAgentsBatched(
     concurrency?: number;
     onProgress?: (progress: BatchProgress) => void;
     onAgentComplete?: (result: AgentResult) => void;
+    /** Agent IDs to skip (already completed in a previous run) */
+    skipAgentIds?: string[];
+    /** Callback when agent status changes (for state persistence) */
+    onStateChange?: (agentId: string, status: AgentRunStatus, result?: AgentResult) => void;
   } = {}
 ): Promise<BatchRunResult> {
-  const { concurrency = DEFAULT_CONCURRENCY, onProgress, onAgentComplete } = options;
+  const {
+    concurrency = DEFAULT_CONCURRENCY,
+    onProgress,
+    onAgentComplete,
+    skipAgentIds = [],
+    onStateChange
+  } = options;
 
-  // Resolve agent IDs and create work queue
+  // Resolve agent IDs and filter out skipped ones
   const resolvedAgentIds = agentIds === 'all' ? getAgentIds() : agentIds;
-  const queue = [...resolvedAgentIds];
-  const totalAgents = resolvedAgentIds.length;
+  const skipSet = new Set(skipAgentIds);
+  const agentsToRun = resolvedAgentIds.filter(id => !skipSet.has(id));
+
+  const queue = [...agentsToRun];
+  const totalAgents = resolvedAgentIds.length; // Total includes skipped for progress display
+  const skippedCount = skipAgentIds.length;
 
   const startTime = Date.now();
   const agentResults: AgentResult[] = [];
-  let completedCount = 0;
+  let completedCount = skippedCount; // Start from skipped count for accurate progress
 
   // Worker function - pulls from queue until empty
   async function processAgentFromQueue(): Promise<void> {
@@ -234,6 +251,9 @@ export async function runAgentsBatched(
       if (!agentId) break; // Queue exhausted by another worker
 
       const agent = getAgent(agentId);
+
+      // Notify state change: running
+      onStateChange?.(agentId, 'running');
 
       const progressCallback = (message: string) => {
         onProgress?.({
@@ -250,6 +270,8 @@ export async function runAgentsBatched(
         const result = await runSingleAgent(agentId, targetPath, progressCallback);
         agentResults.push(result);
         completedCount++;
+        // Notify state change: completed
+        onStateChange?.(agentId, 'completed', result);
         onAgentComplete?.(result);
       } catch (error) {
         // Track the error in the result so callers can distinguish failures from empty results
@@ -265,13 +287,15 @@ export async function runAgentsBatched(
         };
         agentResults.push(failedResult);
         completedCount++;
+        // Notify state change: error
+        onStateChange?.(agentId, 'error', failedResult);
         onAgentComplete?.(failedResult);
       }
     }
   }
 
   // Spawn workers (limit to actual queue size if smaller than concurrency)
-  const workerCount = Math.min(concurrency, totalAgents);
+  const workerCount = Math.min(concurrency, agentsToRun.length);
   const workers = Array.from({ length: workerCount }, () => processAgentFromQueue());
   await Promise.all(workers);
 
@@ -297,7 +321,8 @@ export async function runAgentsBatched(
     totalTickets: aggregated.totalTickets,
     totalDurationMs: Date.now() - startTime,
     totalCostUsd: aggregated.totalCostUsd,
-    failedAgents: aggregated.failedAgents
+    failedAgents: aggregated.failedAgents,
+    skippedAgents: skippedCount
   };
 }
 

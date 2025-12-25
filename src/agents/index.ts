@@ -1,6 +1,5 @@
 // Agent definitions
 export { agents, getAgent, getAgentIds, getAllAgents } from './definitions/index.js';
-export { criticalPathScout } from './definitions/critical-path-scout.js';
 
 // Agent runners
 export { runScanner } from './scanner.js';

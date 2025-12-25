@@ -1,11 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useApp } from 'ink';
 import Spinner from 'ink-spinner';
-import { runAgentsBatched, getAgentIds } from '../agents/index.js';
+import { runAgentsBatched, getAgentIds, getAgent } from '../agents/index.js';
 import type { BatchProgress, AgentResult, BatchRunResult } from '../agents/index.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { throttle } from '../utils/throttle.js';
+import {
+  loadRunState,
+  saveRunState,
+  clearRunState,
+  createRunState,
+  getCompletedAgentIds,
+  updateAgentStatus,
+  markRunComplete,
+  type BatchRunState,
+  type AgentResultSummary
+} from '../storage/run-state.js';
 
 interface BatchAppProps {
   targetPath: string;
@@ -14,6 +25,7 @@ interface BatchAppProps {
     agent?: string;
     concurrency?: number;
     dryRun: boolean;
+    resume?: boolean;
   };
 }
 
@@ -34,6 +46,7 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
   const [currentProgress, setCurrentProgress] = useState<BatchProgress | null>(null);
   const [agentStatuses, setAgentStatuses] = useState<AgentStatus[]>([]);
   const [result, setResult] = useState<BatchRunResult | null>(null);
+  const [skippedCount, setSkippedCount] = useState(0);
 
   // Throttled progress update - 150ms (faster than single-agent 200ms) because batch mode
   // has less frequent updates per agent and users benefit from snappier feedback during
@@ -41,6 +54,9 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
   const throttledSetProgress = useRef(
     throttle((progress: BatchProgress) => setCurrentProgress(progress), 150)
   ).current;
+
+  // Ref to hold mutable run state (avoids stale closures in callbacks)
+  const runStateRef = useRef<BatchRunState | null>(null);
 
   useEffect(() => {
     async function runBatchScan() {
@@ -59,21 +75,59 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
         return;
       }
 
-      // Initialize agent statuses
+      // Load or create run state
       const agentIds = getAgentIds();
-      setAgentStatuses(agentIds.map(id => ({
-        agentId: id,
-        agentName: id,
-        status: 'pending',
-        candidateIssues: 0,
-        approvedIssues: 0
-      })));
+      let skipAgentIds: string[] = [];
+
+      if (flags.resume) {
+        const existingState = await loadRunState(resolvedPath);
+        if (existingState && existingState.completedAt === null) {
+          // Resume from existing state
+          runStateRef.current = existingState;
+          skipAgentIds = getCompletedAgentIds(existingState);
+          setSkippedCount(skipAgentIds.length);
+        } else {
+          // No valid state to resume, create fresh
+          runStateRef.current = createRunState(
+            resolvedPath,
+            agentIds,
+            flags.concurrency ?? 4,
+            (id) => getAgent(id)?.name ?? id
+          );
+        }
+      } else {
+        // Fresh run - clear any existing state
+        await clearRunState(resolvedPath);
+        runStateRef.current = createRunState(
+          resolvedPath,
+          agentIds,
+          flags.concurrency ?? 4,
+          (id) => getAgent(id)?.name ?? id
+        );
+      }
+
+      // Save initial state
+      await saveRunState(resolvedPath, runStateRef.current);
+
+      // Initialize agent statuses (mark skipped ones as complete)
+      const skipSet = new Set(skipAgentIds);
+      setAgentStatuses(agentIds.map(id => {
+        const existingAgent = runStateRef.current?.agents.find(a => a.agentId === id);
+        return {
+          agentId: id,
+          agentName: existingAgent?.agentName ?? getAgent(id)?.name ?? id,
+          status: skipSet.has(id) ? 'complete' : 'pending',
+          candidateIssues: existingAgent?.result?.candidateIssues ?? 0,
+          approvedIssues: existingAgent?.result?.approvedIssues ?? 0
+        };
+      }));
 
       setPhase('running');
 
       try {
         const batchResult = await runAgentsBatched(resolvedPath, 'all', {
           concurrency: flags.concurrency ?? 4,
+          skipAgentIds,
           onProgress: (progress) => {
             throttledSetProgress(progress);
             // Update agent status to running
@@ -88,15 +142,51 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
               s.agentId === agentResult.agentId
                 ? {
                     ...s,
-                    status: 'complete' as const,
+                    status: agentResult.error ? 'error' : 'complete' as const,
                     agentName: agentResult.agentName,
                     candidateIssues: agentResult.scanResult.issues.length,
                     approvedIssues: agentResult.arbitratorResult.approvedIssues.length
                   }
                 : s
             ));
+          },
+          onStateChange: async (agentId, status, agentResult) => {
+            if (!runStateRef.current) return;
+
+            // Build result summary if agent completed successfully
+            let resultSummary: AgentResultSummary | undefined;
+            if (status === 'completed' && agentResult && !agentResult.error) {
+              resultSummary = {
+                candidateIssues: agentResult.scanResult.issues.length,
+                approvedIssues: agentResult.arbitratorResult.approvedIssues.length,
+                rejectedIssues: agentResult.arbitratorResult.rejectedIssues.length,
+                ticketsCreated: agentResult.arbitratorResult.ticketsCreated.length,
+                costUsd: agentResult.scanResult.costUsd
+              };
+            }
+
+            // Update state
+            runStateRef.current = updateAgentStatus(
+              runStateRef.current,
+              agentId,
+              status,
+              {
+                error: agentResult?.error,
+                result: resultSummary,
+                agentName: agentResult?.agentName
+              }
+            );
+
+            // Persist to disk
+            await saveRunState(resolvedPath, runStateRef.current);
           }
         });
+
+        // Mark run as complete
+        if (runStateRef.current) {
+          runStateRef.current = markRunComplete(runStateRef.current);
+          await saveRunState(resolvedPath, runStateRef.current);
+        }
 
         setResult(batchResult);
         setPhase('complete');
@@ -107,7 +197,7 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
     }
 
     runBatchScan();
-  }, [resolvedPath, flags.dryRun, flags.concurrency, throttledSetProgress, exit]);
+  }, [resolvedPath, flags.dryRun, flags.concurrency, flags.resume, throttledSetProgress, exit]);
 
   // Auto-exit
   useEffect(() => {
@@ -151,6 +241,9 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
             <Text>Progress: </Text>
             <Text color="green" bold>{completedAgents}</Text>
             <Text>/{agentStatuses.length} agents complete</Text>
+            {skippedCount > 0 && (
+              <Text dimColor> ({skippedCount} resumed)</Text>
+            )}
           </Box>
 
           {/* Currently running agents */}
@@ -198,6 +291,9 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
               <Box>
                 <Text dimColor>Agents run: </Text>
                 <Text>{result.agentResults.length}</Text>
+                {result.skippedAgents > 0 && (
+                  <Text dimColor> (+{result.skippedAgents} resumed)</Text>
+                )}
               </Box>
               <Box>
                 <Text dimColor>Candidates: </Text>

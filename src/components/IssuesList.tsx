@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useApp } from 'ink';
 import { loadIssueStore } from '../storage/issues.js';
+import { extractTicketId } from '../storage/tickets.js';
 import type { ApprovedIssue, IssueSeverity, IssueStore } from '../types/index.js';
 
 const SEVERITY_ORDER: IssueSeverity[] = ['critical', 'high', 'medium', 'low'];
@@ -25,10 +26,15 @@ interface IssueRowProps {
 }
 
 function IssueRow({ issue }: IssueRowProps) {
+  const ticketId = extractTicketId(issue.ticketPath);
+  const isIgnored = issue.status === 'wont_fix';
   return (
     <Box paddingLeft={2}>
       <Text>• </Text>
-      <Text bold>{issue.title}</Text>
+      {ticketId && <Text color={isIgnored ? 'gray' : 'cyan'}>{ticketId}</Text>}
+      {ticketId && <Text>: </Text>}
+      <Text bold={!isIgnored} dimColor={isIgnored}>{issue.title}</Text>
+      {isIgnored && <Text color="gray"> [ignored]</Text>}
       <Text dimColor> ({issue.filePath}</Text>
       {issue.lineRange && (
         <Text dimColor>:{issue.lineRange.start}-{issue.lineRange.end}</Text>
@@ -66,9 +72,10 @@ function SeverityGroup({ severity, issues }: SeverityGroupProps) {
 interface IssuesListProps {
   targetPath: string;
   severityFilter?: string[];
+  showIgnored?: boolean;
 }
 
-export function IssuesList({ targetPath, severityFilter }: IssuesListProps) {
+export function IssuesList({ targetPath, severityFilter, showIgnored }: IssuesListProps) {
   const { exit } = useApp();
   const [store, setStore] = useState<IssueStore | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,9 +103,18 @@ export function IssuesList({ targetPath, severityFilter }: IssuesListProps) {
 
   // Filter by severity if filter provided
   let issues = store.issues;
+
+  // Filter out ignored issues unless showIgnored is true
+  if (!showIgnored) {
+    issues = issues.filter(i => i.status !== 'wont_fix');
+  }
+
   if (severityFilter && severityFilter.length > 0) {
     issues = issues.filter(i => severityFilter.includes(i.severity));
   }
+
+  // Count ignored issues for display
+  const ignoredCount = store.issues.filter(i => i.status === 'wont_fix').length;
 
   // Group by severity
   const grouped = new Map<IssueSeverity, ApprovedIssue[]>();
@@ -154,6 +170,15 @@ export function IssuesList({ targetPath, severityFilter }: IssuesListProps) {
               issues={grouped.get(sev) ?? []}
             />
           ))}
+        </Box>
+      )}
+
+      {/* Hint about ignored issues */}
+      {!showIgnored && ignoredCount > 0 && (
+        <Box marginTop={1}>
+          <Text dimColor>
+            ({ignoredCount} ignored issue{ignoredCount !== 1 ? 's' : ''} hidden. Use --all to show.)
+          </Text>
         </Box>
       )}
     </Box>

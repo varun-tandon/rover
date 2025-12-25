@@ -24,6 +24,11 @@ export interface AgentDefinition {
 export type IssueSeverity = 'low' | 'medium' | 'high' | 'critical';
 
 /**
+ * Status of an issue (for tracking "won't fix" issues)
+ */
+export type IssueStatus = 'open' | 'wont_fix';
+
+/**
  * A candidate issue detected by a scanner agent, pending validation
  */
 export interface CandidateIssue {
@@ -76,6 +81,8 @@ export interface ApprovedIssue extends CandidateIssue {
   approvedAt: string;
   /** Path to the generated ticket file */
   ticketPath: string;
+  /** Status of the issue (undefined or 'open' = active, 'wont_fix' = ignored) */
+  status?: IssueStatus;
 }
 
 /**
@@ -230,3 +237,67 @@ export const voteSchema = {
   },
   required: ['approve', 'reasoning']
 } as const;
+
+/**
+ * A cluster of related issues for consolidation
+ */
+export interface IssueCluster {
+  /** Unique identifier for this cluster */
+  id: string;
+  /** Reason for clustering (e.g., "Same file: src/api/auth.ts") */
+  reason: string;
+  /** Issues in this cluster */
+  issues: ApprovedIssue[];
+}
+
+/**
+ * A dependency relationship between two issues
+ */
+export interface IssueDependency {
+  /** Issue ID that must be completed first */
+  from: string;
+  /** Issue ID that depends on the 'from' issue */
+  to: string;
+  /** Type of dependency */
+  type: 'blocks' | 'conflicts' | 'enables';
+  /** AI-generated explanation of why this dependency exists */
+  reason: string;
+}
+
+/**
+ * A group of issues that can be worked on in parallel
+ */
+export interface ParallelGroup {
+  /** Name/description of this workstream */
+  name: string;
+  /** Issue IDs in this group */
+  issueIds: string[];
+}
+
+/**
+ * Result of AI dependency analysis
+ */
+export interface DependencyAnalysis {
+  /** Direct dependencies between issues */
+  dependencies: IssueDependency[];
+  /** Groups of issues that can be parallelized */
+  parallelGroups: ParallelGroup[];
+  /** AI-generated summary of the analysis */
+  summary: string;
+  /** Recommended execution order */
+  executionOrder: string[];
+}
+
+/**
+ * A complete work plan
+ */
+export interface WorkPlan {
+  /** ISO timestamp of generation */
+  generatedAt: string;
+  /** Issues included in this plan */
+  issues: ApprovedIssue[];
+  /** Dependency analysis result */
+  analysis: DependencyAnalysis;
+  /** Generated Mermaid diagram */
+  mermaidDiagram: string;
+}
