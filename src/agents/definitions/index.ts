@@ -11,7 +11,6 @@ import { boilerplateBuster } from './boilerplate-buster.js';
 import { obviousnessAuditor } from './obviousness-auditor.js';
 import { whyAsker } from './why-asker.js';
 import { namingRenovator } from './naming-renovator.js';
-import { interfaceDocumenter } from './interface-documenter.js';
 
 // Consistency agents
 import { consistencyCop } from './consistency-cop.js';
@@ -34,6 +33,7 @@ import { dependencyAuditor } from './dependency-auditor.js';
 import { deadCodeDetector } from './dead-code-detector.js';
 import { complexityAnalyzer } from './complexity-analyzer.js';
 import { duplicationFinder } from './duplication-finder.js';
+import { staleArtifactDetector } from './stale-artifact-detector.js';
 
 // API agents
 import { apiContractValidator } from './api-contract-validator.js';
@@ -70,7 +70,6 @@ export const agents: Record<string, AgentDefinition> = {
   'obviousness-auditor': obviousnessAuditor,
   'why-asker': whyAsker,
   'naming-renovator': namingRenovator,
-  'interface-documenter': interfaceDocumenter,
 
   // Consistency
   'consistency-cop': consistencyCop,
@@ -93,6 +92,7 @@ export const agents: Record<string, AgentDefinition> = {
   'dead-code-detector': deadCodeDetector,
   'complexity-analyzer': complexityAnalyzer,
   'duplication-finder': duplicationFinder,
+  'stale-artifact-detector': staleArtifactDetector,
 
   // API
   'api-contract-validator': apiContractValidator,
@@ -149,7 +149,6 @@ export {
   obviousnessAuditor,
   whyAsker,
   namingRenovator,
-  interfaceDocumenter,
 
   // Consistency
   consistencyCop,
@@ -172,6 +171,7 @@ export {
   deadCodeDetector,
   complexityAnalyzer,
   duplicationFinder,
+  staleArtifactDetector,
 
   // API
   apiContractValidator,

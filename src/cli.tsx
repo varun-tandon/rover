@@ -16,6 +16,8 @@ import { App } from './components/App.js';
 import { BatchApp } from './components/BatchApp.js';
 import { IssuesList } from './components/IssuesList.js';
 import { ConsolidateApp } from './components/ConsolidateApp.js';
+import { FixApp } from './components/FixApp.js';
+import { ReviewApp } from './components/ReviewApp.js';
 import { getAgentIds, getAllAgents } from './agents/index.js';
 import { runPlanner } from './agents/planner.js';
 import { loadIssueStore, removeIssues, ignoreIssues, selectTopPriorityIssues } from './storage/issues.js';
@@ -53,6 +55,8 @@ const cli = meow(`
 
   Commands
     scan <path>           Run AI agents to scan a codebase and create issue tickets
+    fix <id>...           Auto-fix issues using Claude with iterative code review
+    review                List completed fixes and create pull requests
     consolidate [path]    Find and merge duplicate/related issues using AI
     plan [path]           Generate prioritized work plan with dependency graph
     agents                List all available scanning agents with descriptions
@@ -80,6 +84,55 @@ const cli = meow(`
 
     Batch runs with --all can be resumed if interrupted. If a previous run was
     incomplete, rover will prompt to resume or start fresh.
+
+  FIXING ISSUES
+    The fix command creates isolated git worktrees and uses Claude to automatically
+    fix issues. Each fix goes through iterative code review until clean.
+
+    Workflow:
+      1. Creates a git worktree with branch fix/ISSUE-XXX
+      2. Claude analyzes the issue and implements a fix
+      3. Claude commits the changes
+      4. A code review is run on the changes
+      5. If review finds issues, Claude addresses them
+      6. Steps 3-5 repeat until review passes (or max iterations hit)
+      7. Worktree is left in place for you to create a PR
+
+    Options:
+      --concurrency         Issues to fix in parallel (default: 4)
+      --max-iterations      Max review cycles per issue (default: 5)
+      --verbose             Stream all Claude output for debugging
+
+    Examples:
+      $ rover fix ISSUE-001                    # Fix a single issue
+      $ rover fix ISSUE-001 ISSUE-002          # Fix multiple issues in parallel
+      $ rover fix ISSUE-001 --max-iterations=3 # Limit review iterations
+      $ rover fix ISSUE-001 --verbose          # See all Claude output
+
+    After fixing, use "rover review" to list fixes and create pull requests.
+
+  REVIEWING FIXES
+    The review command shows all completed fixes and helps create pull requests.
+    Fixes are tracked in .rover/fix-state.json with their worktree locations.
+
+    Subcommands:
+      review list              List all fixes with their status
+      review submit <id>       Create a PR for a specific fix
+      review submit --all      Create PRs for all ready fixes
+      review clean <id>        Remove a fix worktree and its record
+      review clean --all       Remove all fix worktrees and records
+
+    Options:
+      --all                 Submit PRs / clean all fixes
+      --draft               Create draft PRs instead of regular PRs
+
+    Examples:
+      $ rover review list                    # See all completed fixes
+      $ rover review submit ISSUE-001        # Create PR for one fix
+      $ rover review submit --all            # Create PRs for all ready fixes
+      $ rover review submit ISSUE-001 --draft # Create a draft PR
+      $ rover review clean ISSUE-001         # Remove worktree after merge
+      $ rover review clean --all             # Remove all worktrees and records
 
   MANAGING ISSUES
     Issues are stored in .rover/tickets/ as Markdown files (ISSUE-001.md, etc.).
@@ -178,6 +231,7 @@ const cli = meow(`
     .rover/issues.json      Issue history for deduplication across runs
     .rover/memory.md        User-provided context for agents
     .rover/run-state.json   Tracks batch run progress for resume capability
+    .rover/fix-state.json   Tracks fix workflow state and PR status
     .rover/plans/           Work plans with Mermaid dependency diagrams
 `, {
   importMeta: import.meta,
@@ -205,6 +259,14 @@ const cli = meow(`
     severity: {
       type: 'string',
       shortFlag: 's'
+    },
+    maxIterations: {
+      type: 'number',
+      default: 5
+    },
+    draft: {
+      type: 'boolean',
+      default: false
     }
   }
 });
@@ -306,12 +368,100 @@ if (command === 'plan') {
       console.log(`  - Cost: $${result.costUsd.toFixed(4)}`);
       console.log(`  - Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
 
+      // Print runnable commands
+      const executionOrder = result.analysis.executionOrder.filter(Boolean);
+      if (executionOrder.length > 0) {
+        console.log('\nCommands (in dependency order):');
+        console.log('--------------------------------');
+        for (const issueId of executionOrder) {
+          console.log(`rover fix ${issueId}`);
+        }
+        console.log('');
+        console.log('Or run all at once:');
+        console.log(`rover fix ${executionOrder.join(' ')}`);
+        console.log('');
+        console.log('See the generated plan file for detailed dependency explanations.');
+      }
+
       process.exit(0);
     } catch (err) {
       console.error(`Error: ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
   })();
+}
+
+// Handle 'fix' command
+if (command === 'fix') {
+  const issueIds = cli.input.slice(1);
+
+  if (issueIds.length === 0) {
+    console.error('Error: Please provide at least one issue ID to fix.');
+    console.error('Usage: rover fix ISSUE-001 [ISSUE-002 ...]');
+    process.exit(1);
+  }
+
+  // Validate issue ID format
+  const invalidIds = issueIds.filter(id => !/^ISSUE-\d+$/i.test(id));
+  if (invalidIds.length > 0) {
+    console.error(`Error: Invalid issue ID format: ${invalidIds.join(', ')}`);
+    console.error('Expected format: ISSUE-XXX (e.g., ISSUE-001, ISSUE-042)');
+    process.exit(1);
+  }
+
+  render(
+    <FixApp
+      targetPath={process.cwd()}
+      issueIds={issueIds.map(id => id.toUpperCase())}
+      flags={{
+        concurrency: cli.flags.concurrency,
+        maxIterations: cli.flags.maxIterations,
+        verbose: cli.flags.verbose
+      }}
+    />
+  );
+}
+
+// Handle 'review' command
+if (command === 'review') {
+  const subcommand = cli.input[1] as 'list' | 'submit' | 'clean' | undefined;
+  const issueId = cli.input[2]?.toUpperCase();
+
+  // Default to 'list' if no subcommand
+  const effectiveSubcommand = subcommand ?? 'list';
+
+  if (!['list', 'submit', 'clean'].includes(effectiveSubcommand)) {
+    console.error(`Error: Unknown subcommand '${subcommand}'`);
+    console.error('Usage: rover review [list|submit|clean] [ISSUE-ID]');
+    process.exit(1);
+  }
+
+  // Validate issue ID format if provided
+  if (issueId && !/^ISSUE-\d+$/i.test(issueId)) {
+    console.error(`Error: Invalid issue ID format: ${issueId}`);
+    console.error('Expected format: ISSUE-XXX (e.g., ISSUE-001, ISSUE-042)');
+    process.exit(1);
+  }
+
+  // Clean requires an issue ID OR --all flag
+  if (effectiveSubcommand === 'clean' && !issueId && !cli.flags.all) {
+    console.error('Error: Issue ID or --all flag required for clean command');
+    console.error('Usage: rover review clean ISSUE-XXX');
+    console.error('       rover review clean --all');
+    process.exit(1);
+  }
+
+  render(
+    <ReviewApp
+      targetPath={process.cwd()}
+      subcommand={effectiveSubcommand}
+      issueId={issueId}
+      flags={{
+        draft: cli.flags.draft,
+        all: cli.flags.all,
+      }}
+    />
+  );
 }
 
 // Handle 'agents' command separately
@@ -534,6 +684,10 @@ if (!command) {
   // Already handled above, React component is rendering
 } else if (command === 'plan') {
   // Already handled above, async IIFE is running
+} else if (command === 'fix') {
+  // Already handled above, React component is rendering
+} else if (command === 'review') {
+  // Already handled above, React component is rendering
 } else if (command === 'scan') {
   if (!targetPath) {
     console.error('Error: Please provide a target path to scan.');

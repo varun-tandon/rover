@@ -1,0 +1,518 @@
+/**
+ * Code review execution and parsing for the fix workflow
+ */
+
+import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import type { ReviewItem, ReviewAnalysis } from './types.js';
+import { filterIgnoredFiles, filterDiffByRoverignore } from '../storage/roverignore.js';
+
+// Review prompt path - check environment variable first, then fallback to default location
+const REVIEW_PROMPT_PATH = process.env['ROVER_REVIEW_PROMPT_PATH']
+  ?? '/Users/varun/Documents/prompts/gemini_review_prompt_pr.txt';
+
+/**
+ * Get the default branch name (main, master, etc.)
+ */
+async function getDefaultBranch(worktreePath: string): Promise<string> {
+  return new Promise((resolve) => {
+    // Try to get the default branch from remote
+    const child = spawn('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], {
+      cwd: worktreePath,
+    });
+
+    let stdout = '';
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code === 0 && stdout.trim()) {
+        // Output is like "refs/remotes/origin/main" - extract "main"
+        const branch = stdout.trim().split('/').pop() ?? 'main';
+        resolve(branch);
+      } else {
+        // Fallback to 'main', then try 'master' if needed
+        resolve('main');
+      }
+    });
+
+    child.on('error', () => {
+      resolve('main');
+    });
+  });
+}
+
+/**
+ * Get the git diff between the worktree branch and the default branch
+ */
+async function getGitDiff(worktreePath: string): Promise<string> {
+  const defaultBranch = await getDefaultBranch(worktreePath);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['diff', `${defaultBranch}...HEAD`], {
+      cwd: worktreePath,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(`git diff failed: ${stderr}`));
+      }
+    });
+
+    child.on('error', reject);
+  });
+}
+
+/**
+ * Get the list of changed files
+ */
+async function getChangedFiles(worktreePath: string): Promise<string[]> {
+  const defaultBranch = await getDefaultBranch(worktreePath);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['diff', '--name-only', `${defaultBranch}...HEAD`], {
+      cwd: worktreePath,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(stdout.trim().split('\n').filter(Boolean));
+      } else {
+        reject(new Error(`git diff --name-only failed: ${stderr}`));
+      }
+    });
+
+    child.on('error', reject);
+  });
+}
+
+/**
+ * Parse a stream-json line for tool usage information (for progress reporting)
+ */
+function parseReviewToolUsage(line: string): string | null {
+  try {
+    const parsed = JSON.parse(line);
+
+    // Look for tool_use in assistant messages
+    if (parsed.type === 'assistant' && parsed.message?.content) {
+      for (const block of parsed.message.content) {
+        if (block.type === 'tool_use') {
+          const toolName = block.name;
+          const input = block.input as Record<string, unknown>;
+
+          switch (toolName) {
+            case 'Read':
+              return `[Review] Reading: ${input['file_path'] ?? 'file'}`;
+            case 'Glob':
+              return `[Review] Searching: ${input['pattern'] ?? 'files'}`;
+            case 'Grep':
+              return `[Review] Grepping: ${input['pattern'] ?? 'pattern'}`;
+            case 'LS':
+              return `[Review] Listing: ${input['path'] ?? 'directory'}`;
+            default:
+              return `[Review] Using ${toolName}`;
+          }
+        }
+      }
+    }
+
+    // Look for text content (Claude's thinking/responses)
+    if (parsed.type === 'assistant' && parsed.message?.content) {
+      for (const block of parsed.message.content) {
+        if (block.type === 'text' && block.text) {
+          // Extract first line as a status hint
+          const firstLine = String(block.text).split('\n')[0]?.slice(0, 60);
+          if (firstLine && firstLine.length > 10) {
+            return `[Review] ${firstLine}${String(block.text).length > 60 ? '...' : ''}`;
+          }
+        }
+      }
+    }
+  } catch {
+    // Not valid JSON, ignore
+  }
+  return null;
+}
+
+/**
+ * Parse a stream-json line for text content (for verbose output)
+ */
+function parseReviewTextContent(line: string): string | null {
+  try {
+    const parsed = JSON.parse(line);
+
+    // Extract text from assistant messages
+    if (parsed.type === 'assistant' && parsed.message?.content) {
+      const texts: string[] = [];
+      for (const block of parsed.message.content) {
+        if (block.type === 'text' && block.text) {
+          texts.push(String(block.text));
+        }
+        if (block.type === 'tool_use') {
+          const toolName = block.name;
+          const input = block.input as Record<string, unknown>;
+          // Show tool usage in a readable format
+          if (toolName === 'Read') {
+            texts.push(`[Tool: ${toolName}] ${input['file_path'] ?? ''}`);
+          } else if (toolName === 'Glob' || toolName === 'Grep') {
+            texts.push(`[Tool: ${toolName}] ${input['pattern'] ?? ''}`);
+          } else if (toolName === 'LS') {
+            texts.push(`[Tool: ${toolName}] ${input['path'] ?? ''}`);
+          } else {
+            texts.push(`[Tool: ${toolName}]`);
+          }
+        }
+      }
+      if (texts.length > 0) {
+        return texts.join('\n');
+      }
+    }
+
+    // Show tool results
+    if (parsed.type === 'user' && parsed.message?.content) {
+      for (const block of parsed.message.content) {
+        if (block.type === 'tool_result') {
+          const content = block.content;
+          if (typeof content === 'string' && content.length < 500) {
+            return `[Result] ${content.slice(0, 200)}${content.length > 200 ? '...' : ''}`;
+          }
+        }
+      }
+    }
+  } catch {
+    // Not valid JSON
+  }
+  return null;
+}
+
+/**
+ * Extract text content from stream-json output for the final review result
+ */
+function extractReviewText(output: string): string {
+  const lines = output.split('\n');
+  const textParts: string[] = [];
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+
+    try {
+      const parsed = JSON.parse(line);
+
+      // Extract text from assistant messages
+      if (parsed.type === 'assistant' && parsed.message?.content) {
+        for (const block of parsed.message.content) {
+          if (block.type === 'text' && block.text) {
+            textParts.push(String(block.text));
+          }
+        }
+      }
+    } catch {
+      // Not valid JSON, ignore
+    }
+  }
+
+  return textParts.join('\n') || output;
+}
+
+interface ReviewOptions {
+  onProgress?: (message: string) => void;
+  verbose?: boolean;
+}
+
+/**
+ * Run a code review using Claude CLI with the review prompt
+ * The reviewer only has read-only access to the codebase (Read, Glob, Grep, LS)
+ */
+export async function runReview(
+  worktreePath: string,
+  options: ReviewOptions = {}
+): Promise<string> {
+  const { onProgress, verbose } = options;
+
+  // Read the review prompt template
+  const reviewPromptTemplate = await readFile(REVIEW_PROMPT_PATH, 'utf-8');
+
+  // Get the diff and changed files
+  const [rawDiff, rawChangedFiles] = await Promise.all([
+    getGitDiff(worktreePath),
+    getChangedFiles(worktreePath),
+  ]);
+
+  // Filter files and diff based on .roverignore
+  const [diff, changedFiles] = await Promise.all([
+    filterDiffByRoverignore(worktreePath, rawDiff),
+    filterIgnoredFiles(worktreePath, rawChangedFiles),
+  ]);
+
+  if (!diff.trim()) {
+    return 'No changes to review. LGTM.';
+  }
+
+  // Construct the review prompt
+  const prompt = `${reviewPromptTemplate}
+
+CHANGED FILES:
+${changedFiles.join('\n')}
+
+DIFF:
+\`\`\`diff
+${diff}
+\`\`\`
+
+Please review the changes above according to the guidelines provided.`;
+
+  // Run Claude CLI for the review with read-only tools
+  return new Promise((resolve, reject) => {
+    const args = [
+      '--print',
+      '--output-format', 'stream-json',
+      '--allowedTools', 'Read,Glob,Grep,LS,mcp__*', // Read-only tools + MCP
+      '--model', 'sonnet',
+    ];
+
+    if (onProgress) {
+      onProgress('[Review] Starting code review...');
+    }
+
+    if (verbose) {
+      console.log(`[verbose] [Review] cwd: ${worktreePath}`);
+      console.log(`[verbose] [Review] Prompt length: ${prompt.length} chars`);
+    }
+
+    const child = spawn('claude', args, {
+      cwd: worktreePath,
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Write prompt to stdin and close it
+    child.stdin.write(prompt);
+    child.stdin.end();
+
+    if (verbose) {
+      console.log(`[verbose] [Review] Process spawned with PID: ${child.pid}`);
+    }
+
+    let stdout = '';
+    let stderr = '';
+    let lineBuffer = '';
+
+    child.stdout.on('data', (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+
+      // Parse streaming output for progress updates and verbose logging
+      if (onProgress || verbose) {
+        lineBuffer += chunk;
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() ?? ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.trim()) {
+            if (verbose) {
+              // In verbose mode, stream raw text content directly to stdout
+              const textContent = parseReviewTextContent(line);
+              if (textContent) {
+                console.log(`[review] ${textContent}`);
+              } else {
+                // Show raw JSON type for debugging if we can't parse content
+                try {
+                  const parsed = JSON.parse(line);
+                  if (parsed.type) {
+                    console.log(`[review] [${parsed.type}]`);
+                  }
+                } catch {
+                  // Not JSON
+                }
+              }
+            }
+
+            if (onProgress) {
+              const toolMessage = parseReviewToolUsage(line);
+              if (toolMessage) {
+                onProgress(toolMessage);
+              }
+            }
+          }
+        }
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      const chunk = data.toString();
+      stderr += chunk;
+      if (verbose) {
+        console.log(`[review] [stderr] ${chunk}`);
+      }
+    });
+
+    child.on('close', (code) => {
+      if (onProgress) {
+        onProgress('[Review] Review complete');
+      }
+
+      if (code === 0) {
+        // Extract text content from stream-json output
+        resolve(extractReviewText(stdout));
+      } else {
+        // Even if claude exits non-zero, we might have useful output
+        const text = extractReviewText(stdout);
+        resolve(text || `Review failed: ${stderr}`);
+      }
+    });
+
+    child.on('error', (err) => {
+      reject(new Error(`Failed to run review: ${err.message}`));
+    });
+  });
+}
+
+/**
+ * Parse review output to extract actionable items using Claude SDK
+ */
+export async function parseReviewForActionables(
+  reviewOutput: string
+): Promise<ReviewAnalysis> {
+  // Quick check for obviously clean reviews - return early if clearly positive
+  const lowerReview = reviewOutput.toLowerCase();
+  if (
+    lowerReview.includes('lgtm') ||
+    lowerReview.includes('looks good to me') ||
+    lowerReview.includes('no issues found') ||
+    lowerReview.includes('no actionable items')
+  ) {
+    return {
+      isClean: true,
+      items: [],
+    };
+  }
+
+  const parsePrompt = `Analyze this code review and extract actionable items.
+
+REVIEW:
+${reviewOutput}
+
+Return a JSON object with this structure:
+{
+  "isClean": true/false,
+  "items": [
+    {
+      "severity": "must_fix" | "should_fix" | "suggestion",
+      "description": "what needs to be fixed",
+      "file": "optional file path"
+    }
+  ]
+}
+
+Severity definitions:
+- "must_fix": bugs, security issues, breaking changes, logic errors, violations of critical design principles
+- "should_fix": significant design issues, complexity concerns, code quality problems
+- "suggestion": minor improvements, style preferences, optional enhancements
+
+Rules:
+- If the review is positive with no actionable feedback, set isClean to true and items to []
+- Ignore positive comments, only extract things that need to be changed
+- Be conservative: only mark as "must_fix" if it's truly critical
+- Comments about style preferences or "could do X" without strong recommendation are "suggestion"
+
+Return ONLY the JSON, no markdown, no explanation.`;
+
+  try {
+    const agentQuery = query({
+      prompt: parsePrompt,
+      options: {
+        model: 'claude-sonnet-4-5-20250929',
+        allowedTools: [],
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        maxTurns: 1,
+      },
+    });
+
+    let resultText = '';
+
+    for await (const message of agentQuery) {
+      if (message.type === 'result' && message.subtype === 'success') {
+        resultText = message.result;
+      }
+    }
+
+    // Parse the JSON response
+    const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        isClean?: boolean;
+        items?: Array<{
+          severity?: string;
+          description?: string;
+          file?: string;
+        }>;
+      };
+
+      const items: ReviewItem[] = (parsed.items ?? []).map((item) => ({
+        severity: (item.severity ?? 'suggestion') as ReviewItem['severity'],
+        description: item.description ?? '',
+        file: item.file,
+      }));
+
+      return {
+        isClean: parsed.isClean ?? items.length === 0,
+        items,
+      };
+    }
+  } catch (error) {
+    console.error('Failed to parse review:', error);
+  }
+
+  // Default: treat as needing review if we couldn't parse
+  return {
+    isClean: false,
+    items: [
+      {
+        severity: 'should_fix',
+        description: 'Could not parse review output. Manual review required.',
+      },
+    ],
+  };
+}
+
+/**
+ * Check if a review has actionable items that require another iteration
+ */
+export function hasActionableItems(analysis: ReviewAnalysis): boolean {
+  if (analysis.isClean) {
+    return false;
+  }
+
+  // Only "must_fix" and "should_fix" items require iteration
+  // "suggestion" items don't block completion
+  return analysis.items.some(
+    (item) => item.severity === 'must_fix' || item.severity === 'should_fix'
+  );
+}

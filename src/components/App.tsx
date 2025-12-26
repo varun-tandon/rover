@@ -36,6 +36,7 @@ export function App({ command, targetPath, flags }: AppProps) {
   const [ticketPaths, setTicketPaths] = useState<string[]>([]);
   const [totalDuration, setTotalDuration] = useState(0);
   const [totalCost, setTotalCost] = useState(0);
+  const [scanCost, setScanCost] = useState(0);
 
   const agentId = flags.agent ?? 'security-auditor';
   const agent = getAgent(agentId);
@@ -45,6 +46,11 @@ export function App({ command, targetPath, flags }: AppProps) {
   // with React render performance (avoids excessive re-renders during rapid file scanning)
   const throttledSetScanMessage = useRef(
     throttle((msg: string) => setScanMessage(msg), 200)
+  ).current;
+
+  // Throttled cost setter for realtime cost updates
+  const throttledSetScanCost = useRef(
+    throttle((cost: number) => setScanCost(cost), 200)
   ).current;
 
   // Initialize voter statuses
@@ -123,7 +129,8 @@ export function App({ command, targetPath, flags }: AppProps) {
           targetPath: resolvedPath,
           agentId,
           existingIssues: [],
-          onProgress: throttledSetScanMessage
+          onProgress: throttledSetScanMessage,
+          onCostUpdate: throttledSetScanCost
         });
 
         setCandidateIssues(scanResult.issues);
@@ -190,7 +197,7 @@ export function App({ command, targetPath, flags }: AppProps) {
     }
 
     runWorkflow();
-  }, [command, agentId, agent, resolvedPath, flags.dryRun, initVoterStatuses, updateVoterProgress, throttledSetScanMessage]);
+  }, [command, agentId, agent, resolvedPath, flags.dryRun, initVoterStatuses, updateVoterProgress, throttledSetScanMessage, throttledSetScanCost]);
 
   // Auto-exit after completion
   useEffect(() => {
@@ -235,6 +242,7 @@ export function App({ command, targetPath, flags }: AppProps) {
           message={scanMessage}
           isComplete={phase !== 'scanning'}
           issueCount={candidateIssues.length}
+          costUsd={scanCost}
         />
       )}
 

@@ -224,6 +224,32 @@ function generatePlanMarkdown(plan: WorkPlan): string {
 
   lines.push('');
 
+  // Runnable commands - use AI-generated markdown if available
+  if (plan.analysis.commandsMarkdown) {
+    lines.push(plan.analysis.commandsMarkdown);
+    lines.push('');
+  } else {
+    // Fallback to simple command list
+    lines.push('## Commands');
+    lines.push('');
+    lines.push('Run the following commands in order to fix issues sequentially:');
+    lines.push('');
+    lines.push('```bash');
+    for (const issueId of plan.analysis.executionOrder) {
+      if (issueId) {
+        lines.push(`rover fix ${issueId}`);
+      }
+    }
+    lines.push('```');
+    lines.push('');
+    lines.push('Or run all at once:');
+    lines.push('');
+    lines.push('```bash');
+    lines.push(`rover fix ${plan.analysis.executionOrder.filter(Boolean).join(' ')}`);
+    lines.push('```');
+    lines.push('');
+  }
+
   // Parallel groups explanation
   lines.push('## Parallel Workstreams');
   lines.push('');

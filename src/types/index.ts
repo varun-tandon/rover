@@ -286,6 +286,8 @@ export interface DependencyAnalysis {
   summary: string;
   /** Recommended execution order */
   executionOrder: string[];
+  /** AI-generated markdown section with rover fix commands */
+  commandsMarkdown?: string;
 }
 
 /**

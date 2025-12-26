@@ -8,6 +8,17 @@ interface ScanProgressProps {
   message: string;
   isComplete: boolean;
   issueCount?: number;
+  costUsd?: number;
+}
+
+/**
+ * Format cost for display, showing appropriate precision
+ */
+function formatCost(costUsd: number): string {
+  if (costUsd < 0.01) {
+    return `$${costUsd.toFixed(4)}`;
+  }
+  return `$${costUsd.toFixed(2)}`;
 }
 
 export function ScanProgress({
@@ -15,13 +26,20 @@ export function ScanProgress({
   targetPath,
   message,
   isComplete,
-  issueCount
+  issueCount,
+  costUsd
 }: ScanProgressProps) {
   return (
     <Box flexDirection="column" marginY={1}>
       <Box>
         <Text color="cyan" bold>Scanning with: </Text>
         <Text>{agentName}</Text>
+        {costUsd !== undefined && costUsd > 0 && (
+          <>
+            <Text dimColor>  •  </Text>
+            <Text color="yellow">{formatCost(costUsd)}</Text>
+          </>
+        )}
       </Box>
 
       <Box>

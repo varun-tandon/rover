@@ -113,7 +113,8 @@ Return ONLY valid JSON with this exact structure:
     { "name": "Workstream Name", "issueIds": ["ISSUE-XXX", "ISSUE-YYY"] }
   ],
   "summary": "High-level analysis summary explaining the dependency structure and recommended approach",
-  "executionOrder": ["ISSUE-XXX", "ISSUE-YYY", ...]
+  "executionOrder": ["ISSUE-XXX", "ISSUE-YYY", ...],
+  "commandsMarkdown": "## Commands\\n\\nRun these commands in order...\\n\\n\`\`\`bash\\nrover fix ISSUE-XXX\\nrover fix ISSUE-YYY\\n\`\`\`\\n\\nOr run all at once:\\n\\n\`\`\`bash\\nrover fix ISSUE-XXX ISSUE-YYY\\n\`\`\`"
 }
 
 ## CONSTRAINTS
@@ -123,6 +124,9 @@ Return ONLY valid JSON with this exact structure:
 - Dependencies should only exist between issues in different parallel groups OR within a group to show sequence
 - executionOrder should list ALL issues in recommended fix order
 - Keep summary concise but informative (2-3 sentences)
+- commandsMarkdown MUST contain a markdown section with \`rover fix\` commands in the correct dependency order
+  - Include brief explanations of why certain issues must come before others
+  - Show both sequential commands and a combined command to run all at once
 
 Return ONLY the JSON object. No markdown, no explanations outside the JSON.`;
 
@@ -185,6 +189,7 @@ Return ONLY the JSON object. No markdown, no explanations outside the JSON.`;
       }>;
       summary?: string;
       executionOrder?: string[];
+      commandsMarkdown?: string;
     };
 
     // Build the analysis with fallbacks
@@ -224,7 +229,8 @@ Return ONLY the JSON object. No markdown, no explanations outside the JSON.`;
       dependencies,
       parallelGroups,
       summary: parsed.summary ?? 'Analysis complete.',
-      executionOrder
+      executionOrder,
+      commandsMarkdown: parsed.commandsMarkdown
     };
 
     const durationMs = Date.now() - startTime;
