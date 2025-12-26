@@ -4,13 +4,17 @@
 
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { ReviewItem, ReviewAnalysis } from './types.js';
 import { filterIgnoredFiles, filterDiffByRoverignore } from '../storage/roverignore.js';
 
-// Review prompt path - check environment variable first, then fallback to default location
+// Review prompt path - check environment variable first, then fallback to bundled prompt
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const REVIEW_PROMPT_PATH = process.env['ROVER_REVIEW_PROMPT_PATH']
-  ?? '/Users/varun/Documents/prompts/gemini_review_prompt_pr.txt';
+  ?? join(__dirname, 'prompts', 'review-prompt.txt');
 
 /**
  * Get the default branch name (main, master, etc.)
