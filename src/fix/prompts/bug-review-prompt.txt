@@ -45,6 +45,9 @@ You are reviewing code changes for bugs, errors, and implementation mistakes. Fo
 - **Exposed secrets**: API keys, tokens, or credentials in code
 - **Missing input validation**: User input used without validation
 - **CORS/auth issues**: Missing or incorrect authorization checks
+- **Missing user/tenant scoping**: Database queries that don't filter by user_id or tenant, especially in pagination
+- **Broken authorization in refactors**: New code paths that bypass existing security filters
+- **RLS assumption errors**: Relying on Row Level Security without verifying it's configured for the table/operation
 
 ### 7. Import/Export Errors
 - **Circular imports**: Modules importing each other causing undefined values

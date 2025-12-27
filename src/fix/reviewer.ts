@@ -607,3 +607,105 @@ export function hasActionableItems(analysis: ReviewAnalysis): boolean {
     (item) => item.severity === 'must_fix' || item.severity === 'should_fix'
   );
 }
+
+/**
+ * Verify that Claude's dismissal of review findings is legitimate.
+ * Uses a skeptical reviewer to check each must_fix item.
+ */
+export async function verifyReviewDismissal(
+  mustFixItems: ReviewItem[],
+  claudeJustification: string,
+  _worktreePath: string,
+  options?: { onProgress?: (msg: string) => void }
+): Promise<{
+  allVerified: boolean;
+  remainingItems: ReviewItem[];
+}> {
+  if (mustFixItems.length === 0) {
+    return { allVerified: true, remainingItems: [] };
+  }
+
+  options?.onProgress?.('Verifying review dismissal...');
+
+  const verifyPrompt = `You are a skeptical code reviewer verifying whether review findings were correctly dismissed.
+
+ORIGINAL FINDINGS (marked as must_fix):
+${mustFixItems.map((item, i) => `${i + 1}. ${item.description}${item.file ? ` (${item.file})` : ''}`).join('\n')}
+
+CLAUDE'S JUSTIFICATION FOR DISMISSING THEM:
+${claudeJustification}
+
+Your job: For each finding, determine if Claude's dismissal is VALID or INVALID.
+
+A dismissal is VALID if:
+- The finding was factually incorrect (code doesn't work that way)
+- The finding was about code not changed in this PR
+- The issue was already handled elsewhere in the code
+
+A dismissal is INVALID if:
+- Claude is making assumptions about external systems (RLS, middleware) without verification
+- Claude is downplaying real security/correctness issues
+- The justification is vague or doesn't directly address the finding
+
+Be SKEPTICAL. When in doubt, mark as INVALID.
+
+Return JSON:
+{
+  "items": [
+    { "index": 1, "valid": true, "reason": "brief explanation" },
+    { "index": 2, "valid": false, "reason": "brief explanation" }
+  ]
+}
+
+Return ONLY the JSON, no markdown, no explanation.`;
+
+  try {
+    const agentQuery = query({
+      prompt: verifyPrompt,
+      options: {
+        model: 'claude-sonnet-4-5-20250929',
+        allowedTools: [],
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        maxTurns: 1,
+      },
+    });
+
+    let resultText = '';
+    for await (const message of agentQuery) {
+      if (message.type === 'result' && message.subtype === 'success') {
+        resultText = message.result;
+      }
+    }
+
+    // Parse response
+    const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      // Parse failed - be conservative, keep all items
+      return { allVerified: false, remainingItems: mustFixItems };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      items?: Array<{ index?: number; valid?: boolean; reason?: string }>;
+    };
+    const remainingItems: ReviewItem[] = [];
+
+    for (const item of parsed.items ?? []) {
+      if (!item.valid && item.index !== undefined && item.index >= 1 && item.index <= mustFixItems.length) {
+        const mustFixItem = mustFixItems[item.index - 1];
+        if (mustFixItem) {
+          remainingItems.push(mustFixItem);
+        }
+      }
+    }
+
+    return {
+      allVerified: remainingItems.length === 0,
+      remainingItems,
+    };
+  } catch (error) {
+    // On error, be conservative - don't verify
+    console.error('Error verifying review dismissal:', error);
+    return { allVerified: false, remainingItems: mustFixItems };
+  }
+}

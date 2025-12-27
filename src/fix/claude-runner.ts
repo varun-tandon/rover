@@ -283,6 +283,33 @@ export function isReviewNotApplicable(output: string): boolean {
 }
 
 /**
+ * Extract Claude's justification for marking review as not applicable.
+ * Parses stream-json output to get all text content.
+ */
+export function extractDismissalJustification(output: string): string {
+  const lines = output.split('\n');
+  let fullText = '';
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type === 'assistant' && parsed.message?.content) {
+        for (const block of parsed.message.content) {
+          if (block.type === 'text') {
+            fullText += block.text + '\n';
+          }
+        }
+      }
+    } catch {
+      // Not JSON, skip
+    }
+  }
+
+  return fullText;
+}
+
+/**
  * Parse session ID from Claude CLI stream-json output
  * The output contains JSON lines, and we look for the session_id field
  */

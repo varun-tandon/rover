@@ -14,8 +14,8 @@ import type {
   IterationTrace,
 } from './types.js';
 import { createWorktree, generateUniqueBranchName, removeWorktree } from './worktree.js';
-import { runClaude, buildInitialFixPrompt, buildIterationPrompt, isAlreadyFixed, isReviewNotApplicable } from './claude-runner.js';
-import { runFullReview, parseReviewForActionables, hasActionableItems } from './reviewer.js';
+import { runClaude, buildInitialFixPrompt, buildIterationPrompt, isAlreadyFixed, isReviewNotApplicable, extractDismissalJustification } from './claude-runner.js';
+import { runFullReview, parseReviewForActionables, hasActionableItems, verifyReviewDismissal } from './reviewer.js';
 import { getTicketPathById } from '../storage/tickets.js';
 import { removeIssues } from '../storage/issues.js';
 import {
@@ -311,6 +311,53 @@ async function fixSingleIssue(
 
     // Check if Claude determined the review feedback was not applicable (iterations > 1)
     if (iteration > 1 && isReviewNotApplicable(claudeResult.output)) {
+      // Get must_fix items from previous iteration's review
+      const previousReview = trace.iterations[iteration - 2]?.review;
+      const mustFixItems = (previousReview?.parsedItems ?? []).filter(
+        (item: ReviewItem) => item.severity === 'must_fix'
+      );
+
+      // If there were must_fix items, verify the dismissal
+      if (mustFixItems.length > 0) {
+        onProgress({
+          issueId: issue.id,
+          phase: 'reviewing',
+          iteration,
+          maxIterations,
+          message: 'Verifying review dismissal...',
+        });
+
+        const justification = extractDismissalJustification(claudeResult.output);
+        const verification = await verifyReviewDismissal(
+          mustFixItems,
+          justification,
+          worktreePath
+        );
+
+        if (!verification.allVerified) {
+          // Some dismissals were invalid - continue with remaining items
+          onProgress({
+            issueId: issue.id,
+            phase: 'fixing',
+            iteration,
+            maxIterations,
+            message: `${verification.remainingItems.length} review items still need attention`,
+          });
+
+          // Set remaining items for the next iteration
+          lastActionableItems = verification.remainingItems.map((i: ReviewItem) => ({
+            severity: i.severity,
+            description: i.description,
+            file: i.file,
+          }));
+
+          iterationTrace.completedAt = new Date().toISOString();
+          trace.iterations.push(iterationTrace);
+          continue;
+        }
+      }
+
+      // All dismissals verified (or no must_fix items) - accept and complete
       iterationTrace.reviewNotApplicable = true;
       iterationTrace.completedAt = new Date().toISOString();
       trace.iterations.push(iterationTrace);
@@ -320,7 +367,7 @@ async function fixSingleIssue(
         phase: 'complete',
         iteration,
         maxIterations,
-        message: `Complete - review feedback not applicable (${iteration} iteration${iteration !== 1 ? 's' : ''})`,
+        message: `Complete - review feedback verified as not applicable (${iteration} iteration${iteration !== 1 ? 's' : ''})`,
       });
 
       return saveTraceAndReturn({
