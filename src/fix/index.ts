@@ -10,15 +10,18 @@ import type {
   FixProgress,
   IssueContext,
   ReviewItem,
+  FixTrace,
+  IterationTrace,
 } from './types.js';
 import { createWorktree, generateUniqueBranchName, removeWorktree } from './worktree.js';
 import { runClaude, buildInitialFixPrompt, buildIterationPrompt, isAlreadyFixed, isReviewNotApplicable } from './claude-runner.js';
-import { runReview, parseReviewForActionables, hasActionableItems } from './reviewer.js';
+import { runFullReview, parseReviewForActionables, hasActionableItems } from './reviewer.js';
 import { getTicketPathById } from '../storage/tickets.js';
 import { removeIssues } from '../storage/issues.js';
 import {
   getOrCreateFixState,
   saveFixState,
+  saveFixTrace,
   upsertFixRecord,
   type FixRecord,
 } from '../storage/fix-state.js';
@@ -96,6 +99,27 @@ async function fixSingleIssue(
   const startTime = Date.now();
   const resolvedOriginal = resolve(originalPath);
 
+  // Initialize trace early so we can capture all outcomes
+  const trace: FixTrace = {
+    issueId: issue.id,
+    startedAt: new Date(startTime).toISOString(),
+    iterations: [],
+    finalStatus: 'error', // Will be updated on success
+  };
+
+  // Helper to save trace and return result
+  async function saveTraceAndReturn(result: FixResult): Promise<FixResult> {
+    trace.completedAt = new Date().toISOString();
+    trace.finalStatus = result.status;
+    trace.error = result.error;
+    try {
+      await saveFixTrace(resolvedOriginal, trace);
+    } catch (err) {
+      console.warn(`Warning: Could not save trace for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return result;
+  }
+
   // Generate branch name
   const baseBranchName = `fix/${issue.id}`;
   let branchName: string;
@@ -103,7 +127,7 @@ async function fixSingleIssue(
   try {
     branchName = await generateUniqueBranchName(resolvedOriginal, baseBranchName);
   } catch (error) {
-    return {
+    return saveTraceAndReturn({
       issueId: issue.id,
       status: 'error',
       worktreePath: '',
@@ -111,7 +135,7 @@ async function fixSingleIssue(
       iterations: 0,
       error: `Failed to generate branch name: ${error instanceof Error ? error.message : String(error)}`,
       durationMs: Date.now() - startTime,
-    };
+    });
   }
 
   // Step 1: Create worktree
@@ -127,7 +151,7 @@ async function fixSingleIssue(
   try {
     worktreePath = await createWorktree(resolvedOriginal, branchName);
   } catch (error) {
-    return {
+    return saveTraceAndReturn({
       issueId: issue.id,
       status: 'error',
       worktreePath: '',
@@ -135,7 +159,7 @@ async function fixSingleIssue(
       iterations: 0,
       error: `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
       durationMs: Date.now() - startTime,
-    };
+    });
   }
 
   // Step 2-7: Fix and review loop
@@ -143,6 +167,17 @@ async function fixSingleIssue(
   let lastActionableItems: ReviewItem[] = [];
 
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
+    // Initialize iteration trace
+    const iterationTrace: IterationTrace = {
+      iteration,
+      startedAt: new Date().toISOString(),
+      completedAt: '', // Will be set when iteration completes
+      claudeOutput: '',
+      claudeExitCode: 0,
+      alreadyFixed: false,
+      reviewNotApplicable: false,
+    };
+
     // Step 2: Run Claude to fix
     onProgress({
       issueId: issue.id,
@@ -197,7 +232,9 @@ async function fixSingleIssue(
     }
 
     if (!claudeResult) {
-      return {
+      iterationTrace.completedAt = new Date().toISOString();
+      trace.iterations.push(iterationTrace);
+      return saveTraceAndReturn({
         issueId: issue.id,
         status: 'error',
         worktreePath,
@@ -205,8 +242,13 @@ async function fixSingleIssue(
         iterations: iteration - 1,
         error: 'Claude CLI returned no result',
         durationMs: Date.now() - startTime,
-      };
+      });
     }
+
+    // Capture Claude result in trace
+    iterationTrace.claudeSessionId = claudeResult.sessionId || undefined;
+    iterationTrace.claudeOutput = claudeResult.output;
+    iterationTrace.claudeExitCode = claudeResult.exitCode;
 
     // Save session ID for potential resume
     if (claudeResult.sessionId) {
@@ -215,7 +257,9 @@ async function fixSingleIssue(
 
     // Check if Claude exited with an error
     if (claudeResult.exitCode !== 0) {
-      return {
+      iterationTrace.completedAt = new Date().toISOString();
+      trace.iterations.push(iterationTrace);
+      return saveTraceAndReturn({
         issueId: issue.id,
         status: 'error',
         worktreePath,
@@ -223,11 +267,15 @@ async function fixSingleIssue(
         iterations: iteration,
         error: `Claude CLI exited with code ${claudeResult.exitCode}`,
         durationMs: Date.now() - startTime,
-      };
+      });
     }
 
     // Check if Claude determined the issue is already fixed (first iteration only)
     if (iteration === 1 && isAlreadyFixed(claudeResult.output)) {
+      iterationTrace.alreadyFixed = true;
+      iterationTrace.completedAt = new Date().toISOString();
+      trace.iterations.push(iterationTrace);
+
       onProgress({
         issueId: issue.id,
         phase: 'already_fixed',
@@ -251,18 +299,22 @@ async function fixSingleIssue(
         console.warn(`Warning: Could not remove issue ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
 
-      return {
+      return saveTraceAndReturn({
         issueId: issue.id,
         status: 'already_fixed',
         worktreePath: '',
         branchName,
         iterations: iteration,
         durationMs: Date.now() - startTime,
-      };
+      });
     }
 
     // Check if Claude determined the review feedback was not applicable (iterations > 1)
     if (iteration > 1 && isReviewNotApplicable(claudeResult.output)) {
+      iterationTrace.reviewNotApplicable = true;
+      iterationTrace.completedAt = new Date().toISOString();
+      trace.iterations.push(iterationTrace);
+
       onProgress({
         issueId: issue.id,
         phase: 'complete',
@@ -271,14 +323,14 @@ async function fixSingleIssue(
         message: `Complete - review feedback not applicable (${iteration} iteration${iteration !== 1 ? 's' : ''})`,
       });
 
-      return {
+      return saveTraceAndReturn({
         issueId: issue.id,
         status: 'success',
         worktreePath,
         branchName,
         iterations: iteration,
         durationMs: Date.now() - startTime,
-      };
+      });
     }
 
     // Step 3: Run review
@@ -290,9 +342,9 @@ async function fixSingleIssue(
       message: 'Running code review...',
     });
 
-    let reviewOutput: string;
+    let fullReview;
     try {
-      reviewOutput = await runReview(worktreePath, {
+      fullReview = await runFullReview(worktreePath, {
         verbose,
         onProgress: (msg) => {
           onProgress({
@@ -306,7 +358,9 @@ async function fixSingleIssue(
       });
     } catch (error) {
       // Review failed - treat as needing manual review
-      return {
+      iterationTrace.completedAt = new Date().toISOString();
+      trace.iterations.push(iterationTrace);
+      return saveTraceAndReturn({
         issueId: issue.id,
         status: 'error',
         worktreePath,
@@ -314,14 +368,28 @@ async function fixSingleIssue(
         iterations: iteration,
         error: `Review failed: ${error instanceof Error ? error.message : String(error)}`,
         durationMs: Date.now() - startTime,
-      };
+      });
     }
 
-    // Step 4: Parse review for actionable items
-    const analysis = await parseReviewForActionables(reviewOutput);
+    // Step 4: Parse review for actionable items (parses combined architecture + bug reviews)
+    const analysis = await parseReviewForActionables(fullReview.combined);
+
+    // Capture review data in trace
+    iterationTrace.review = {
+      architectureOutput: fullReview.architectureReview,
+      bugOutput: fullReview.bugReview,
+      combinedOutput: fullReview.combined,
+      parsedItems: analysis.items,
+      actionableCount: analysis.items.filter(
+        (i) => i.severity === 'must_fix' || i.severity === 'should_fix'
+      ).length,
+    };
 
     // Step 5: Check if we're done
     if (!hasActionableItems(analysis)) {
+      iterationTrace.completedAt = new Date().toISOString();
+      trace.iterations.push(iterationTrace);
+
       onProgress({
         issueId: issue.id,
         phase: 'complete',
@@ -330,17 +398,20 @@ async function fixSingleIssue(
         message: `Complete after ${iteration} iteration(s)`,
       });
 
-      return {
+      return saveTraceAndReturn({
         issueId: issue.id,
         status: 'success',
         worktreePath,
         branchName,
         iterations: iteration,
         durationMs: Date.now() - startTime,
-      };
+      });
     }
 
-    // Step 6: More iterations needed
+    // Step 6: More iterations needed - finalize this iteration trace
+    iterationTrace.completedAt = new Date().toISOString();
+    trace.iterations.push(iterationTrace);
+
     const mustFixCount = analysis.items.filter((i) => i.severity === 'must_fix').length;
     const shouldFixCount = analysis.items.filter((i) => i.severity === 'should_fix').length;
 
@@ -369,14 +440,14 @@ async function fixSingleIssue(
     actionableItems: lastActionableItems.length,
   });
 
-  return {
+  return saveTraceAndReturn({
     issueId: issue.id,
     status: 'iteration_limit',
     worktreePath,
     branchName,
     iterations: maxIterations,
     durationMs: Date.now() - startTime,
-  };
+  });
 }
 
 /**

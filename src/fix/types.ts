@@ -69,3 +69,38 @@ export interface ReviewAnalysis {
   isClean: boolean;
   items: ReviewItem[];
 }
+
+export interface ReviewTrace {
+  architectureOutput: string;
+  bugOutput: string;
+  combinedOutput: string;
+  parsedItems: ReviewItem[];
+  actionableCount: number;
+}
+
+export interface IterationTrace {
+  iteration: number;
+  startedAt: string;
+  completedAt: string;
+
+  // Claude execution
+  claudeSessionId?: string;
+  claudeOutput: string;
+  claudeExitCode: number;
+
+  // Markers detected
+  alreadyFixed: boolean;
+  reviewNotApplicable: boolean;
+
+  // Review (if run)
+  review?: ReviewTrace;
+}
+
+export interface FixTrace {
+  issueId: string;
+  startedAt: string;
+  completedAt?: string;
+  iterations: IterationTrace[];
+  finalStatus: FixStatus;
+  error?: string;
+}

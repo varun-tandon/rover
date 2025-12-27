@@ -2,10 +2,11 @@
  * Storage for tracking fix workflow state and completed fixes
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRoverDir, ensureRoverDir } from './issues.js';
+import type { FixTrace } from '../fix/types.js';
 
 const FIX_STATE_FILE = 'fix-state.json';
 const FIX_STATE_VERSION = '1.0.0';
@@ -219,4 +220,73 @@ export function updateFixStatus(
     };
   });
   return { ...state, fixes };
+}
+
+// ============================================================================
+// Fix Trace Storage
+// ============================================================================
+
+const TRACES_DIR = 'traces';
+
+/**
+ * Get the path to the traces directory
+ */
+export function getTracesDir(targetPath: string): string {
+  return join(getRoverDir(targetPath), TRACES_DIR);
+}
+
+/**
+ * Get the path to a specific trace file
+ */
+export function getTracePath(targetPath: string, issueId: string): string {
+  return join(getTracesDir(targetPath), `${issueId}.json`);
+}
+
+/**
+ * Ensure the traces directory exists
+ */
+async function ensureTracesDir(targetPath: string): Promise<void> {
+  await ensureRoverDir(targetPath);
+  const tracesDir = getTracesDir(targetPath);
+  if (!existsSync(tracesDir)) {
+    await mkdir(tracesDir, { recursive: true });
+  }
+}
+
+/**
+ * Save a fix trace to disk
+ */
+export async function saveFixTrace(
+  targetPath: string,
+  trace: FixTrace
+): Promise<void> {
+  await ensureTracesDir(targetPath);
+  const tracePath = getTracePath(targetPath, trace.issueId);
+  const content = JSON.stringify(trace, null, 2);
+  await writeFile(tracePath, content, 'utf-8');
+}
+
+/**
+ * Load a fix trace from disk
+ */
+export async function loadFixTrace(
+  targetPath: string,
+  issueId: string
+): Promise<FixTrace | null> {
+  const tracePath = getTracePath(targetPath, issueId);
+
+  if (!existsSync(tracePath)) {
+    return null;
+  }
+
+  try {
+    const content = await readFile(tracePath, 'utf-8');
+    return JSON.parse(content) as FixTrace;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.error(`Warning: Corrupted trace file for ${issueId}, ignoring: ${error.message}`);
+      return null;
+    }
+    throw error;
+  }
 }

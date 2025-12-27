@@ -10,11 +10,13 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { ReviewItem, ReviewAnalysis } from './types.js';
 import { filterIgnoredFiles, filterDiffByRoverignore } from '../storage/roverignore.js';
 
-// Review prompt path - check environment variable first, then fallback to bundled prompt
+// Review prompt paths - check environment variables first, then fallback to bundled prompts
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const REVIEW_PROMPT_PATH = process.env['ROVER_REVIEW_PROMPT_PATH']
+const ARCHITECTURE_REVIEW_PROMPT_PATH = process.env['ROVER_REVIEW_PROMPT_PATH']
   ?? join(__dirname, 'prompts', 'review-prompt.txt');
+const BUG_REVIEW_PROMPT_PATH = process.env['ROVER_BUG_REVIEW_PROMPT_PATH']
+  ?? join(__dirname, 'prompts', 'bug-review-prompt.txt');
 
 /**
  * Get the default branch name (main, master, etc.)
@@ -249,18 +251,33 @@ interface ReviewOptions {
   verbose?: boolean;
 }
 
+type ReviewType = 'architecture' | 'bug';
+
+interface FullReviewResult {
+  architectureReview: string;
+  bugReview: string;
+  combined: string;
+}
+
 /**
- * Run a code review using Claude CLI with the review prompt
+ * Run a single code review using Claude CLI with the specified review prompt
  * The reviewer only has read-only access to the codebase (Read, Glob, Grep, LS)
  */
-export async function runReview(
+async function runSingleReview(
   worktreePath: string,
+  reviewType: ReviewType,
   options: ReviewOptions = {}
 ): Promise<string> {
   const { onProgress, verbose } = options;
 
+  // Select the appropriate prompt based on review type
+  const promptPath = reviewType === 'architecture'
+    ? ARCHITECTURE_REVIEW_PROMPT_PATH
+    : BUG_REVIEW_PROMPT_PATH;
+  const reviewLabel = reviewType === 'architecture' ? 'Architecture Review' : 'Bug Review';
+
   // Read the review prompt template
-  const reviewPromptTemplate = await readFile(REVIEW_PROMPT_PATH, 'utf-8');
+  const reviewPromptTemplate = await readFile(promptPath, 'utf-8');
 
   // Get the diff and changed files
   const [rawDiff, rawChangedFiles] = await Promise.all([
@@ -295,18 +312,19 @@ Please review the changes above according to the guidelines provided.`;
   return new Promise((resolve, reject) => {
     const args = [
       '--print',
+      '--verbose',
       '--output-format', 'stream-json',
       '--allowedTools', 'Read,Glob,Grep,LS,mcp__*', // Read-only tools + MCP
       '--model', 'sonnet',
     ];
 
     if (onProgress) {
-      onProgress('[Review] Starting code review...');
+      onProgress(`[${reviewLabel}] Starting review...`);
     }
 
     if (verbose) {
-      console.log(`[verbose] [Review] cwd: ${worktreePath}`);
-      console.log(`[verbose] [Review] Prompt length: ${prompt.length} chars`);
+      console.log(`[verbose] [${reviewLabel}] cwd: ${worktreePath}`);
+      console.log(`[verbose] [${reviewLabel}] Prompt length: ${prompt.length} chars`);
     }
 
     const child = spawn('claude', args, {
@@ -320,7 +338,7 @@ Please review the changes above according to the guidelines provided.`;
     child.stdin.end();
 
     if (verbose) {
-      console.log(`[verbose] [Review] Process spawned with PID: ${child.pid}`);
+      console.log(`[verbose] [${reviewLabel}] Process spawned with PID: ${child.pid}`);
     }
 
     let stdout = '';
@@ -378,7 +396,7 @@ Please review the changes above according to the guidelines provided.`;
 
     child.on('close', (code) => {
       if (onProgress) {
-        onProgress('[Review] Review complete');
+        onProgress(`[${reviewLabel}] Review complete`);
       }
 
       if (code === 0) {
@@ -398,6 +416,65 @@ Please review the changes above according to the guidelines provided.`;
 }
 
 /**
+ * Run architecture-focused code review (backwards compatible)
+ * The reviewer only has read-only access to the codebase (Read, Glob, Grep, LS)
+ */
+export async function runReview(
+  worktreePath: string,
+  options: ReviewOptions = {}
+): Promise<string> {
+  return runSingleReview(worktreePath, 'architecture', options);
+}
+
+/**
+ * Run bug-focused code review
+ * Checks for implementation errors, runtime bugs, and common mistakes
+ */
+export async function runBugReview(
+  worktreePath: string,
+  options: ReviewOptions = {}
+): Promise<string> {
+  return runSingleReview(worktreePath, 'bug', options);
+}
+
+/**
+ * Run both architecture and bug reviews
+ * Both reviews must pass for the fix to be considered complete
+ */
+export async function runFullReview(
+  worktreePath: string,
+  options: ReviewOptions = {}
+): Promise<FullReviewResult> {
+  const { onProgress } = options;
+
+  // Run both reviews sequentially to avoid resource contention
+  if (onProgress) {
+    onProgress('[Full Review] Starting architecture review...');
+  }
+  const architectureReview = await runSingleReview(worktreePath, 'architecture', options);
+
+  if (onProgress) {
+    onProgress('[Full Review] Starting bug review...');
+  }
+  const bugReview = await runSingleReview(worktreePath, 'bug', options);
+
+  // Combine the reviews
+  const combined = `## Architecture Review
+
+${architectureReview}
+
+## Bug Review
+
+${bugReview}`;
+
+  return {
+    architectureReview,
+    bugReview,
+    combined,
+  };
+}
+
+/**
  * Parse review output to extract actionable items using Claude SDK
  */
 export async function parseReviewForActionables(
@@ -409,7 +486,8 @@ export async function parseReviewForActionables(
     lowerReview.includes('lgtm') ||
     lowerReview.includes('looks good to me') ||
     lowerReview.includes('no issues found') ||
-    lowerReview.includes('no actionable items')
+    lowerReview.includes('no actionable items') ||
+    lowerReview.includes('no bugs found')
   ) {
     return {
       isClean: true,
