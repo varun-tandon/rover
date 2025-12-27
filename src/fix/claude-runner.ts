@@ -352,7 +352,16 @@ IMPORTANT:
 - Make minimal changes necessary to fix the issue
 - If the issue is already resolved, respond with "ALREADY_FIXED" - do NOT make any commits
 - After committing, respond with "COMMIT_COMPLETE" to signal you're done
-- NEVER use credentials from .env files to connect to external systems (databases, APIs, etc.) - only use them for local configuration if needed`;
+- NEVER use credentials from .env files to connect to external systems (databases, APIs, etc.) - only use them for local configuration if needed
+
+CRITICAL - YOU MUST FIX ALL ITEMS IN THE ISSUE:
+- You are NOT allowed to skip any part of the issue, especially items marked as "Critical" or "High" severity
+- Do NOT make judgment calls about whether a fix is "too risky" or "requires architectural changes"
+- Do NOT defer fixes for "backwards compatibility" concerns - the issue has already been vetted
+- If the issue says to remove error swallowing, remove it. If it says to fail fast, make it fail fast.
+- Your job is to implement what the issue specifies, not to second-guess the requirements
+- If you truly cannot implement something (e.g., missing dependencies), respond with "BLOCKED: <reason>" instead of skipping it silently
+- Partial fixes are NOT acceptable - either fix everything or report what's blocking you`;
 }
 
 /**

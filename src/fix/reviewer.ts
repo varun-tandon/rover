@@ -249,6 +249,7 @@ function extractReviewText(output: string): string {
 interface ReviewOptions {
   onProgress?: (message: string) => void;
   verbose?: boolean;
+  issueContent?: string;
 }
 
 type ReviewType = 'architecture' | 'bug';
@@ -268,7 +269,7 @@ async function runSingleReview(
   reviewType: ReviewType,
   options: ReviewOptions = {}
 ): Promise<string> {
-  const { onProgress, verbose } = options;
+  const { onProgress, verbose, issueContent } = options;
 
   // Select the appropriate prompt based on review type
   const promptPath = reviewType === 'architecture'
@@ -296,9 +297,17 @@ async function runSingleReview(
   }
 
   // Construct the review prompt
+  const issueSection = issueContent ? `
+ORIGINAL ISSUE TO FIX:
+${issueContent}
+
+CRITICAL: In addition to general code review, you MUST verify that ALL items in the original issue have been addressed by the changes. If any required fix from the issue is missing or incomplete, flag it as a "must_fix" item. Do not approve changes that only partially address the issue.
+
+` : '';
+
   const prompt = `${reviewPromptTemplate}
 
-CHANGED FILES:
+${issueSection}CHANGED FILES:
 ${changedFiles.join('\n')}
 
 DIFF:
@@ -306,7 +315,7 @@ DIFF:
 ${diff}
 \`\`\`
 
-Please review the changes above according to the guidelines provided.`;
+Please review the changes above according to the guidelines provided.${issueContent ? ' Pay special attention to whether ALL requirements from the original issue have been addressed.' : ''}`;
 
   // Run Claude CLI for the review with read-only tools
   return new Promise((resolve, reject) => {

@@ -346,6 +346,7 @@ async function fixSingleIssue(
     try {
       fullReview = await runFullReview(worktreePath, {
         verbose,
+        issueContent: issue.content,
         onProgress: (msg) => {
           onProgress({
             issueId: issue.id,
