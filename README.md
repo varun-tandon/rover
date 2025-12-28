@@ -7,6 +7,9 @@ Rover scans your codebase using 43 specialized AI agents to detect code quality 
 ## TL;DR
 
 ```bash
+# Install
+npm install -g github:varun-tandon/rover
+
 # 1. Scan - detect issues with AI agents
 rover scan . --all
 
@@ -33,10 +36,15 @@ This multi-agent validation reduces false positives and ensures issues are worth
 ## Requirements
 
 - Node.js
-- pnpm
 - `ANTHROPIC_API_KEY` environment variable
 
 ## Installation
+
+```bash
+npm install -g github:varun-tandon/rover
+```
+
+Or for development:
 
 ```bash
 git clone https://github.com/varun-tandon/rover.git
