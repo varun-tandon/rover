@@ -90,9 +90,12 @@ export function generateMermaidDiagram(
     }
   }
 
+  // Ensure parallelGroups is an array
+  const parallelGroups = analysis.parallelGroups ?? [];
+
   // Create subgraphs for parallel groups
-  for (let i = 0; i < analysis.parallelGroups.length; i++) {
-    const group = analysis.parallelGroups[i];
+  for (let i = 0; i < parallelGroups.length; i++) {
+    const group = parallelGroups[i];
     if (!group) continue;
     const groupId = sanitizeId(group.name || `workstream_${i + 1}`);
     const groupLabel = group.name || `Workstream ${i + 1}`;
@@ -112,7 +115,7 @@ export function generateMermaidDiagram(
   }
 
   // Add any issues not in a parallel group as standalone nodes
-  const groupedIds = new Set(analysis.parallelGroups.flatMap(g => g.issueIds));
+  const groupedIds = new Set(parallelGroups.flatMap(g => g.issueIds ?? []));
   for (const issue of issues) {
     const ticketId = extractTicketId(issue.ticketPath);
     if (ticketId && !groupedIds.has(ticketId)) {
@@ -123,8 +126,11 @@ export function generateMermaidDiagram(
 
   lines.push('');
 
+  // Ensure dependencies is an array
+  const dependencies = analysis.dependencies ?? [];
+
   // Add dependency arrows
-  for (const dep of analysis.dependencies) {
+  for (const dep of dependencies) {
     let arrow: string;
     switch (dep.type) {
       case 'conflicts':
@@ -207,8 +213,10 @@ function generatePlanMarkdown(plan: WorkPlan): string {
   lines.push('## Recommended Execution Order');
   lines.push('');
 
-  for (let i = 0; i < plan.analysis.executionOrder.length; i++) {
-    const issueId = plan.analysis.executionOrder[i];
+  const executionOrder = plan.analysis.executionOrder ?? [];
+
+  for (let i = 0; i < executionOrder.length; i++) {
+    const issueId = executionOrder[i];
     const issue = plan.issues.find(iss => {
       const id = extractTicketId(iss.ticketPath);
       return id === issueId;
@@ -235,7 +243,7 @@ function generatePlanMarkdown(plan: WorkPlan): string {
     lines.push('Run the following commands in order to fix issues sequentially:');
     lines.push('');
     lines.push('```bash');
-    for (const issueId of plan.analysis.executionOrder) {
+    for (const issueId of executionOrder) {
       if (issueId) {
         lines.push(`rover fix ${issueId}`);
       }
@@ -245,18 +253,19 @@ function generatePlanMarkdown(plan: WorkPlan): string {
     lines.push('Or run all at once:');
     lines.push('');
     lines.push('```bash');
-    lines.push(`rover fix ${plan.analysis.executionOrder.filter(Boolean).join(' ')}`);
+    lines.push(`rover fix ${executionOrder.filter(Boolean).join(' ')}`);
     lines.push('```');
     lines.push('');
   }
 
   // Parallel groups explanation
+  const parallelGroups = plan.analysis.parallelGroups ?? [];
   lines.push('## Parallel Workstreams');
   lines.push('');
   lines.push('The following groups of issues can be worked on simultaneously in separate worktrees:');
   lines.push('');
 
-  for (const group of plan.analysis.parallelGroups) {
+  for (const group of parallelGroups) {
     lines.push(`### ${group.name}`);
     lines.push('');
     for (const issueId of group.issueIds) {
@@ -266,7 +275,8 @@ function generatePlanMarkdown(plan: WorkPlan): string {
   }
 
   // Conflicts warning
-  const conflicts = plan.analysis.dependencies.filter(d => d.type === 'conflicts');
+  const dependencies = plan.analysis.dependencies ?? [];
+  const conflicts = dependencies.filter(d => d.type === 'conflicts');
   if (conflicts.length > 0) {
     lines.push('## Conflicts to Avoid');
     lines.push('');

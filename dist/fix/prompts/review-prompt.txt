@@ -311,6 +311,31 @@ Quick Mental Checklist:
 Following these rules keeps components predictable, performant, and easier to reason about, letting React's reactive model do the heavy lifting instead of juggling Effects.
 Please note, this is just a flow for evaluating anti-patterns, but we should not write comments in our code that explain our decisions.
 
+## CRITICAL: System-Wide Context Analysis
+
+Before reviewing the code changes, you MUST understand how the changed files fit into the broader system:
+
+1. **Trace the Full Code Flow**: For each changed file, use the Glob and Grep tools to find:
+   - Sibling files that serve a similar purpose (e.g., if `intersection-data/route.ts` was changed, find `area-data/route.ts`, `road-data/route.ts`)
+   - Files that import or are imported by the changed files
+   - Files that follow the same pattern or convention being modified
+
+2. **Map the System Architecture**: Mentally construct a diagram of how the changed code relates to the rest of the system:
+   - What other components share the same abstraction layer?
+   - If a pattern is being introduced/changed, where else does that pattern exist?
+   - If security/auth is being added, what other endpoints expose similar data?
+
+3. **Verify Completeness**: The most critical bugs are often INCOMPLETE changes:
+   - If auth was added to one API endpoint, check if sibling endpoints need it too
+   - If a utility was centralized, check if all consumers were updated
+   - If a pattern was refactored, check if all instances were migrated
+
+4. **Flag Inconsistencies as CRITICAL**: If the change creates an inconsistency with sibling/related code (e.g., one endpoint has auth while similar endpoints don't), this is a CRITICAL issue that MUST be flagged, even if the changed code itself is correct.
+
+This contextual analysis is essential. A change that is "correct in isolation" but creates system-wide inconsistency is a bug.
+
+---
+
 OK, these are our code review principles. I want you to review the changes on this branch relative to the main branch and the changes that are on files that are not tracked.
 Don't overly fixate on positives, really focus on the things that must be fixed. Be sure to also do the more general checks for code review, like potential bugs, etc. DO NOT WRITE CODE.
 Note that if something is the industry standard way of doing things with shadcn/tailwind/nextjs, then you can ignore it, even if technically it violates one of the principles.

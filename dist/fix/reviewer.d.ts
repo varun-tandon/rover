@@ -10,6 +10,7 @@ interface ReviewOptions {
 interface FullReviewResult {
     architectureReview: string;
     bugReview: string;
+    completenessReview: string;
     combined: string;
 }
 /**
@@ -23,8 +24,17 @@ export declare function runReview(worktreePath: string, options?: ReviewOptions)
  */
 export declare function runBugReview(worktreePath: string, options?: ReviewOptions): Promise<string>;
 /**
- * Run both architecture and bug reviews
- * Both reviews must pass for the fix to be considered complete
+ * Run completeness review
+ * Verifies that ALL items from the original issue have been addressed
+ * Requires issueContent to be provided
+ */
+export declare function runCompletenessReview(worktreePath: string, options: ReviewOptions & {
+    issueContent: string;
+}): Promise<string>;
+/**
+ * Run architecture, bug, and completeness reviews
+ * All reviews must pass for the fix to be considered complete
+ * Completeness review only runs if issueContent is provided
  */
 export declare function runFullReview(worktreePath: string, options?: ReviewOptions): Promise<FullReviewResult>;
 /**

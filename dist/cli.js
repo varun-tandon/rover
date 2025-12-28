@@ -15,6 +15,7 @@ import { BatchApp } from './components/BatchApp.js';
 import { IssuesList } from './components/IssuesList.js';
 import { ConsolidateApp } from './components/ConsolidateApp.js';
 import { FixApp } from './components/FixApp.js';
+import { BatchFixApp } from './components/BatchFixApp.js';
 import { ReviewApp } from './components/ReviewApp.js';
 import { getAgentIds, getAllAgents } from './agents/index.js';
 import { runPlanner } from './agents/planner.js';
@@ -41,9 +42,8 @@ async function promptYesNo(question) {
 }
 const cli = meow(`
   Scans use a 3-phase AI pipeline: (1) A scanner agent analyzes the codebase and
-  proposes issues, (2) Three voter agents independently evaluate each proposed
-  issue, (3) An arbitrator tallies votes and creates tickets for approved issues
-  (requires 2+ votes to pass).
+  proposes issues, (2) A checker agent validates each proposed issue by examining
+  the source code, (3) Approved issues are saved as tickets for review.
 
   Usage
     $ rover <command> [options]
@@ -61,7 +61,7 @@ const cli = meow(`
   SCANNING
     The scan command runs one or more AI agents against your codebase. Each agent
     specializes in detecting specific types of issues (security, performance,
-    React anti-patterns, etc.). Issues found are validated by voter agents before
+    React anti-patterns, etc.). Issues found are validated by a checker before
     being saved as tickets.
 
     Options:
@@ -262,6 +262,11 @@ const cli = meow(`
         draft: {
             type: 'boolean',
             default: false
+        },
+        batch: {
+            type: 'boolean',
+            default: false,
+            shortFlag: 'b'
         }
     }
 });
@@ -336,11 +341,11 @@ if (command === 'plan') {
             console.log(`Output: ${outputPath}\n`);
             // Summary
             console.log('Summary:');
-            console.log(`  - ${result.analysis.parallelGroups.length} parallel workstream(s) identified`);
-            console.log(`  - ${result.analysis.dependencies.length} dependency/conflict(s) found`);
+            console.log(`  - ${(result.analysis.parallelGroups ?? []).length} parallel workstream(s) identified`);
+            console.log(`  - ${(result.analysis.dependencies ?? []).length} dependency/conflict(s) found`);
             console.log(`  - Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
             // Print runnable commands
-            const executionOrder = result.analysis.executionOrder.filter(Boolean);
+            const executionOrder = (result.analysis.executionOrder ?? []).filter(Boolean);
             if (executionOrder.length > 0) {
                 console.log('\nCommands (in dependency order):');
                 console.log('--------------------------------');
@@ -367,6 +372,7 @@ if (command === 'fix') {
     if (issueIds.length === 0) {
         console.error('Error: Please provide at least one issue ID to fix.');
         console.error('Usage: rover fix ISSUE-001 [ISSUE-002 ...]');
+        console.error('       rover fix --batch ISSUE-001 ISSUE-002  (fix in single branch)');
         process.exit(1);
     }
     // Validate issue ID format
@@ -376,11 +382,26 @@ if (command === 'fix') {
         console.error('Expected format: ISSUE-XXX (e.g., ISSUE-001, ISSUE-042)');
         process.exit(1);
     }
-    render(_jsx(FixApp, { targetPath: process.cwd(), issueIds: issueIds.map(id => id.toUpperCase()), flags: {
-            concurrency: cli.flags.concurrency,
-            maxIterations: cli.flags.maxIterations,
-            verbose: cli.flags.verbose
-        } }));
+    const normalizedIds = issueIds.map(id => id.toUpperCase());
+    // Use BatchFixApp when --batch flag is set (or -b)
+    if (cli.flags.batch) {
+        if (normalizedIds.length < 2) {
+            console.error('Error: --batch requires at least 2 issues to batch together.');
+            console.error('Usage: rover fix --batch ISSUE-001 ISSUE-002 [ISSUE-003 ...]');
+            process.exit(1);
+        }
+        render(_jsx(BatchFixApp, { targetPath: process.cwd(), issueIds: normalizedIds, flags: {
+                maxIterations: cli.flags.maxIterations,
+                verbose: cli.flags.verbose
+            } }));
+    }
+    else {
+        render(_jsx(FixApp, { targetPath: process.cwd(), issueIds: normalizedIds, flags: {
+                concurrency: cli.flags.concurrency,
+                maxIterations: cli.flags.maxIterations,
+                verbose: cli.flags.verbose
+            } }));
+    }
 }
 // Handle 'review' command
 if (command === 'review') {

@@ -183,8 +183,8 @@ const SEVERITY_WEIGHTS = {
 export function selectTopPriorityIssues(issues, count = 10) {
     return [...issues]
         .sort((a, b) => {
-        const scoreA = SEVERITY_WEIGHTS[a.severity] + a.votes.filter(v => v.approve).length;
-        const scoreB = SEVERITY_WEIGHTS[b.severity] + b.votes.filter(v => v.approve).length;
+        const scoreA = SEVERITY_WEIGHTS[a.severity];
+        const scoreB = SEVERITY_WEIGHTS[b.severity];
         return scoreB - scoreA;
     })
         .slice(0, count);

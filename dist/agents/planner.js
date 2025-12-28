@@ -116,11 +116,11 @@ Return ONLY the JSON object. No markdown, no explanations outside the JSON.`;
         if (!resultText) {
             throw new Error('No result from planner agent');
         }
-        const jsonMatch = resultText.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            throw new Error('Failed to parse planner response as JSON');
+        // Check for rate limit messages
+        if (resultText.toLowerCase().includes('hit your limit') || resultText.toLowerCase().includes('resets')) {
+            throw new Error('Claude API rate limit reached. Please try again later.');
         }
-        const parsed = JSON.parse(jsonMatch[0]);
+        const parsed = extractJsonFromText(resultText);
         // Build the analysis with fallbacks
         const dependencies = (parsed.dependencies ?? []).map(dep => ({
             from: dep.from ?? '',
@@ -167,4 +167,36 @@ Return ONLY the JSON object. No markdown, no explanations outside the JSON.`;
         onProgress?.(`Error during planning: ${error instanceof Error ? error.message : 'Unknown error'}`);
         throw error;
     }
+}
+/**
+ * Robustly extract JSON from text that might contain markdown or explanations
+ */
+function extractJsonFromText(text) {
+    // 1. Try parsing the whole text
+    try {
+        return JSON.parse(text);
+    }
+    catch { }
+    // 2. Try extracting from markdown code blocks
+    const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
+    let match;
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+        try {
+            if (match[1]) {
+                return JSON.parse(match[1]);
+            }
+        }
+        catch { }
+    }
+    // 3. Try finding the outermost JSON object
+    const firstOpen = text.indexOf('{');
+    const lastClose = text.lastIndexOf('}');
+    if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+        const candidate = text.substring(firstOpen, lastClose + 1);
+        try {
+            return JSON.parse(candidate);
+        }
+        catch { }
+    }
+    throw new Error('Failed to parse planner response as JSON');
 }

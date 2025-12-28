@@ -35,14 +35,3 @@ export const candidateIssuesSchema = {
     },
     required: ['issues']
 };
-/**
- * JSON schema for structured output from voter agent
- */
-export const voteSchema = {
-    type: 'object',
-    properties: {
-        approve: { type: 'boolean' },
-        reasoning: { type: 'string' }
-    },
-    required: ['approve', 'reasoning']
-};

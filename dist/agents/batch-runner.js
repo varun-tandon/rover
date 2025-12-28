@@ -1,6 +1,6 @@
 import { getAgentIds, getAgent } from './definitions/index.js';
 import { runScanner } from './scanner.js';
-import { runVotersInParallel } from './voter.js';
+import { runChecker } from './checker.js';
 import { runArbitrator } from './arbitrator.js';
 import { getExistingIssueSummaries } from '../storage/issues.js';
 // MAX_RETRIES = 2: Balances reliability with API costs. Testing showed transient errors
@@ -36,7 +36,7 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 /**
- * Run a single agent through the full pipeline (scan -> vote -> arbitrate)
+ * Run a single agent through the full pipeline (scan -> check -> save)
  */
 async function runSingleAgent(agentId, targetPath, onProgress, retryCount = 0) {
     const agent = getAgent(agentId);
@@ -47,20 +47,20 @@ async function runSingleAgent(agentId, targetPath, onProgress, retryCount = 0) {
         // Get existing issues for deduplication
         const existingIssues = await getExistingIssueSummaries(targetPath);
         // Phase 1: Scan
-        onProgress?.(`[${agent.name}] Scanning...`);
+        onProgress?.({ phase: 'scanning', message: `[${agent.name}] Scanning...` });
         const scanResult = await runScanner({
             targetPath,
             agentId,
             existingIssues,
-            onProgress: (msg) => onProgress?.(`[${agent.name}] ${msg}`)
+            onProgress: (msg) => onProgress?.({ phase: 'scanning', message: `[${agent.name}] ${msg}` })
         });
-        // If no issues found, skip voting
+        // If no issues found, skip checking
         if (scanResult.issues.length === 0) {
             return {
                 agentId,
                 agentName: agent.name,
                 scanResult,
-                voterResults: [],
+                checkerResult: { approvedIds: [], rejectedIds: [], durationMs: 0 },
                 arbitratorResult: {
                     approvedIssues: [],
                     rejectedIssues: [],
@@ -68,37 +68,50 @@ async function runSingleAgent(agentId, targetPath, onProgress, retryCount = 0) {
                 }
             };
         }
-        // Phase 2: Vote
-        onProgress?.(`[${agent.name}] Voting on ${scanResult.issues.length} issues...`);
-        const voterResults = await runVotersInParallel(targetPath, agentId, scanResult.issues, 3, (voterId, issueId, completed) => {
-            if (completed) {
-                onProgress?.(`[${agent.name}] ${voterId} finished voting on ${issueId}`);
-            }
-            else {
-                onProgress?.(`[${agent.name}] ${voterId} voting on ${issueId}...`);
+        // Phase 2: Check
+        const totalIssues = scanResult.issues.length;
+        let issuesChecked = 0;
+        onProgress?.({
+            phase: 'checking',
+            message: `[${agent.name}] Checking issues...`,
+            issuesChecked: 0,
+            issuesToCheck: totalIssues
+        });
+        const checkerResult = await runChecker({
+            targetPath,
+            agentId,
+            issues: scanResult.issues,
+            onProgress: (batchCount, completed) => {
+                if (completed) {
+                    issuesChecked += batchCount;
+                    onProgress?.({
+                        phase: 'checking',
+                        message: `[${agent.name}] Checking issues...`,
+                        issuesChecked,
+                        issuesToCheck: totalIssues
+                    });
+                }
             }
         });
-        // Phase 3: Arbitrate
-        onProgress?.(`[${agent.name}] Arbitrating...`);
-        const allVotes = voterResults.flatMap(r => r.votes);
+        // Phase 3: Save approved issues
+        onProgress?.({ phase: 'saving', message: `[${agent.name}] Saving approved issues...` });
         const arbitratorResult = await runArbitrator({
             targetPath,
             candidateIssues: scanResult.issues,
-            votes: allVotes,
-            minimumVotes: 2
+            approvedIds: checkerResult.approvedIds
         });
         return {
             agentId,
             agentName: agent.name,
             scanResult,
-            voterResults,
+            checkerResult,
             arbitratorResult
         };
     }
     catch (error) {
         // Retry on transient errors
         if (isTransientError(error) && retryCount < MAX_RETRIES) {
-            onProgress?.(`[${agent.name}] Transient error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
+            onProgress?.({ phase: 'scanning', message: `[${agent.name}] Transient error, retrying (${retryCount + 1}/${MAX_RETRIES})...` });
             await sleep(RETRY_DELAY_MS * (retryCount + 1));
             return runSingleAgent(agentId, targetPath, onProgress, retryCount + 1);
         }
@@ -107,7 +120,7 @@ async function runSingleAgent(agentId, targetPath, onProgress, retryCount = 0) {
 }
 /**
  * Orchestrates batch scanning of a codebase using multiple agents with a work queue pattern.
- * Each agent runs through the full pipeline: scan -> vote -> arbitrate.
+ * Each agent runs through the full pipeline: scan -> check -> save.
  *
  * @param targetPath - Absolute path to the codebase directory to scan
  * @param agentIds - List of specific agent IDs to run, or 'all' to run all registered agents
@@ -143,14 +156,16 @@ export async function runAgentsBatched(targetPath, agentIds, options = {}) {
             const agent = getAgent(agentId);
             // Notify state change: running
             onStateChange?.(agentId, 'running');
-            const progressCallback = (message) => {
+            const progressCallback = (progress) => {
                 onProgress?.({
-                    phase: 'scanning',
+                    phase: progress.phase,
                     agentId,
                     agentName: agent?.name ?? agentId,
                     completedCount,
                     totalAgents,
-                    message
+                    message: progress.message,
+                    issuesChecked: progress.issuesChecked,
+                    issuesToCheck: progress.issuesToCheck
                 });
             };
             try {
@@ -169,7 +184,7 @@ export async function runAgentsBatched(targetPath, agentIds, options = {}) {
                     agentId,
                     agentName: agent?.name ?? agentId,
                     scanResult: { issues: [], durationMs: 0, filesScanned: 0 },
-                    voterResults: [],
+                    checkerResult: { approvedIds: [], rejectedIds: [], durationMs: 0 },
                     arbitratorResult: { approvedIssues: [], rejectedIssues: [], ticketsCreated: [] },
                     error: errorMessage
                 };

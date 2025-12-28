@@ -53,24 +53,9 @@ export interface CandidateIssue {
     codeSnippet?: string;
 }
 /**
- * A vote from a validation agent on a candidate issue
- */
-export interface Vote {
-    /** Identifier for the voter (e.g., "voter-1", "voter-2") */
-    voterId: string;
-    /** ID of the issue being voted on */
-    issueId: string;
-    /** Whether the voter approves this issue as valid */
-    approve: boolean;
-    /** Reasoning behind the vote */
-    reasoning: string;
-}
-/**
- * An issue that has been approved by majority vote
+ * An issue that has been approved by the checker
  */
 export interface ApprovedIssue extends CandidateIssue {
-    /** All votes cast for this issue */
-    votes: Vote[];
     /** ISO timestamp when the issue was approved */
     approvedAt: string;
     /** Path to the generated ticket file */
@@ -107,21 +92,19 @@ export interface IssueSummary {
  */
 export type ScanStatus = 'idle' | 'scanning' | 'completed' | 'error';
 /**
- * Status of the voting phase
+ * Status of the checking phase
  */
-export type VotingStatus = 'idle' | 'voting' | 'completed' | 'error';
+export type CheckingStatus = 'idle' | 'checking' | 'completed' | 'error';
 /**
- * Status of an individual voter
+ * Status of the checker
  */
-export interface VoterStatus {
-    /** Voter identifier */
-    id: string;
+export interface CheckerStatus {
     /** Current status */
-    status: 'pending' | 'voting' | 'completed' | 'error';
-    /** Number of votes cast */
-    votesCompleted: number;
-    /** Total votes to cast */
-    totalVotes: number;
+    status: 'pending' | 'checking' | 'completed' | 'error';
+    /** Number of issues checked */
+    issuesChecked: number;
+    /** Total issues to check */
+    totalIssues: number;
 }
 /**
  * Overall scan result
@@ -156,7 +139,7 @@ export interface CliFlags {
  */
 export interface AppState {
     /** Current phase */
-    phase: 'init' | 'scanning' | 'voting' | 'arbitrating' | 'complete' | 'error';
+    phase: 'init' | 'scanning' | 'checking' | 'saving' | 'complete' | 'error';
     /** Target path being scanned */
     targetPath: string;
     /** Agent being used */
@@ -165,12 +148,10 @@ export interface AppState {
     scanStatus: ScanStatus;
     /** Candidate issues from scanning */
     candidateIssues: CandidateIssue[];
-    /** Voting status */
-    votingStatus: VotingStatus;
-    /** Status of each voter */
-    voterStatuses: VoterStatus[];
-    /** All votes collected */
-    votes: Vote[];
+    /** Checking status */
+    checkingStatus: CheckingStatus;
+    /** Status of the checker */
+    checkerStatus: CheckerStatus;
     /** Final approved issues */
     approvedIssues: ApprovedIssue[];
     /** Error message if any */
@@ -230,21 +211,6 @@ export declare const candidateIssuesSchema: {
         };
     };
     readonly required: readonly ["issues"];
-};
-/**
- * JSON schema for structured output from voter agent
- */
-export declare const voteSchema: {
-    readonly type: "object";
-    readonly properties: {
-        readonly approve: {
-            readonly type: "boolean";
-        };
-        readonly reasoning: {
-            readonly type: "string";
-        };
-    };
-    readonly required: readonly ["approve", "reasoning"];
 };
 /**
  * A cluster of related issues for consolidation

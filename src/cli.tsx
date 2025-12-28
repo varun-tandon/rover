@@ -368,12 +368,12 @@ if (command === 'plan') {
 
       // Summary
       console.log('Summary:');
-      console.log(`  - ${result.analysis.parallelGroups.length} parallel workstream(s) identified`);
-      console.log(`  - ${result.analysis.dependencies.length} dependency/conflict(s) found`);
+      console.log(`  - ${(result.analysis.parallelGroups ?? []).length} parallel workstream(s) identified`);
+      console.log(`  - ${(result.analysis.dependencies ?? []).length} dependency/conflict(s) found`);
       console.log(`  - Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
 
       // Print runnable commands
-      const executionOrder = result.analysis.executionOrder.filter(Boolean);
+      const executionOrder = (result.analysis.executionOrder ?? []).filter(Boolean);
       if (executionOrder.length > 0) {
         console.log('\nCommands (in dependency order):');
         console.log('--------------------------------');

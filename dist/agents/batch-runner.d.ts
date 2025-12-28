@@ -1,4 +1,4 @@
-import type { ScannerResult, VoterResult, ArbitratorResult } from './types.js';
+import type { ScannerResult, CheckerResult, ArbitratorResult } from './types.js';
 import type { AgentRunStatus } from '../storage/run-state.js';
 /**
  * Progress update during batch agent execution.
@@ -6,7 +6,7 @@ import type { AgentRunStatus } from '../storage/run-state.js';
  */
 export interface BatchProgress {
     /** Current phase of the pipeline for this agent */
-    phase: 'scanning' | 'voting' | 'arbitrating';
+    phase: 'scanning' | 'checking' | 'saving';
     /** Unique identifier of the agent currently being processed */
     agentId: string;
     /** Human-readable name of the agent */
@@ -17,9 +17,13 @@ export interface BatchProgress {
     totalAgents: number;
     /** Human-readable status message describing current activity */
     message: string;
+    /** Number of issues checked (only present during 'checking' phase) */
+    issuesChecked?: number;
+    /** Total issues to check (only present during 'checking' phase) */
+    issuesToCheck?: number;
 }
 /**
- * Complete result from running a single agent through the scan-vote-arbitrate pipeline.
+ * Complete result from running a single agent through the scan-check-save pipeline.
  * Contains all outputs from each phase plus metadata about the agent.
  */
 export interface AgentResult {
@@ -29,9 +33,9 @@ export interface AgentResult {
     agentName: string;
     /** Results from the scanning phase (candidate issues found) */
     scanResult: ScannerResult;
-    /** Results from each voter (votes on candidate issues) */
-    voterResults: VoterResult[];
-    /** Final arbitration results (approved/rejected issues, tickets created) */
+    /** Results from the checker (approved/rejected issue IDs) */
+    checkerResult: CheckerResult;
+    /** Final results (approved/rejected issues, tickets created) */
     arbitratorResult: ArbitratorResult;
     /** Error message if the agent failed during execution. When set, other results may be empty. */
     error?: string;
@@ -45,9 +49,9 @@ export interface BatchRunResult {
     agentResults: AgentResult[];
     /** Total number of candidate issues found across all agents */
     totalCandidateIssues: number;
-    /** Total number of issues that passed voting and were approved */
+    /** Total number of issues that passed checking and were approved */
     totalApprovedIssues: number;
-    /** Total number of issues that were rejected by voters */
+    /** Total number of issues that were rejected by the checker */
     totalRejectedIssues: number;
     /** Total number of ticket files created */
     totalTickets: number;
@@ -60,7 +64,7 @@ export interface BatchRunResult {
 }
 /**
  * Orchestrates batch scanning of a codebase using multiple agents with a work queue pattern.
- * Each agent runs through the full pipeline: scan -> vote -> arbitrate.
+ * Each agent runs through the full pipeline: scan -> check -> save.
  *
  * @param targetPath - Absolute path to the codebase directory to scan
  * @param agentIds - List of specific agent IDs to run, or 'all' to run all registered agents

@@ -1,6 +1,5 @@
 import { jsxs as _jsxs, jsx as _jsx } from "react/jsx-runtime";
 import { Box, Text } from 'ink';
-import { countApprovals } from '../utils/votes.js';
 function IssueCard({ issue, ticketPath }) {
     const getSeverityColor = (severity) => {
         switch (severity) {
@@ -16,8 +15,7 @@ function IssueCard({ issue, ticketPath }) {
                 return 'white';
         }
     };
-    const voteCount = countApprovals(issue.votes);
-    return (_jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: "gray", padding: 1, marginBottom: 1, children: [_jsxs(Box, { gap: 1, children: [_jsxs(Text, { color: getSeverityColor(issue.severity), bold: true, children: ["[", issue.severity.toUpperCase(), "]"] }), _jsx(Text, { bold: true, children: issue.title })] }), _jsxs(Box, { marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "Category: " }), _jsx(Text, { children: issue.category })] }), _jsxs(Box, { children: [_jsx(Text, { dimColor: true, children: "File: " }), _jsx(Text, { color: "cyan", children: issue.filePath }), issue.lineRange && (_jsxs(Text, { dimColor: true, children: [":", issue.lineRange.start, "-", issue.lineRange.end] }))] }), _jsxs(Box, { children: [_jsx(Text, { dimColor: true, children: "Votes: " }), _jsxs(Text, { color: "green", children: [voteCount, "/3 approved"] })] }), _jsxs(Box, { children: [_jsx(Text, { dimColor: true, children: "Ticket: " }), _jsx(Text, { color: "blue", children: ticketPath })] })] }));
+    return (_jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: "gray", padding: 1, marginBottom: 1, children: [_jsxs(Box, { gap: 1, children: [_jsxs(Text, { color: getSeverityColor(issue.severity), bold: true, children: ["[", issue.severity.toUpperCase(), "]"] }), _jsx(Text, { bold: true, children: issue.title })] }), _jsxs(Box, { marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "Category: " }), _jsx(Text, { children: issue.category })] }), _jsxs(Box, { children: [_jsx(Text, { dimColor: true, children: "File: " }), _jsx(Text, { color: "cyan", children: issue.filePath }), issue.lineRange && (_jsxs(Text, { dimColor: true, children: [":", issue.lineRange.start, "-", issue.lineRange.end] }))] }), _jsxs(Box, { children: [_jsx(Text, { dimColor: true, children: "Ticket: " }), _jsx(Text, { color: "blue", children: ticketPath })] })] }));
 }
 function RejectedIssue({ issue }) {
     return (_jsxs(Box, { gap: 1, children: [_jsx(Text, { dimColor: true, children: "\u2717" }), _jsx(Text, { dimColor: true, children: issue.title }), _jsxs(Text, { dimColor: true, children: ["(", issue.filePath, ")"] })] }));

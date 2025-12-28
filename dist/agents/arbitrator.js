@@ -1,45 +1,30 @@
 import { addApprovedIssues } from '../storage/issues.js';
 import { createTicketFiles } from '../storage/tickets.js';
-import { countApprovals } from '../utils/votes.js';
-function groupVotesByIssue(votes) {
-    const grouped = new Map();
-    for (const vote of votes) {
-        const existing = grouped.get(vote.issueId) ?? [];
-        existing.push(vote);
-        grouped.set(vote.issueId, existing);
-    }
-    return grouped;
-}
 /**
- * Run the arbitrator to filter issues by vote count and create tickets.
+ * Save approved issues and create tickets.
  *
  * The arbitrator performs the final stage of the scan pipeline:
- * 1. Collects all votes for each candidate issue
- * 2. Filters to only issues with sufficient approval votes (default: 2/3 majority)
- * 3. Creates markdown ticket files for approved issues (organized by severity)
- * 4. Persists approved issues to the issue store for deduplication
+ * 1. Filters candidate issues to only those approved by the checker
+ * 2. Creates markdown ticket files for approved issues (organized by severity)
+ * 3. Persists approved issues to the issue store for deduplication
  *
  * @param options - Configuration for arbitration
  * @param options.targetPath - Absolute path to the codebase (for ticket storage in .rover/)
  * @param options.candidateIssues - All candidate issues detected by the scanner
- * @param options.votes - All votes from all voters on the candidate issues
- * @param options.minimumVotes - Minimum approval votes required (default: 2 for 3 voters)
+ * @param options.approvedIds - IDs of issues approved by the checker
  * @returns Arbitration results including approved/rejected issues and created ticket paths
  */
 export async function runArbitrator(options) {
-    const { targetPath, candidateIssues, votes, minimumVotes = 2 } = options;
-    const votesByIssue = groupVotesByIssue(votes);
+    const { targetPath, candidateIssues, approvedIds } = options;
+    const approvedIdSet = new Set(approvedIds);
     const approvedIssues = [];
     const rejectedIssues = [];
     const now = new Date().toISOString();
     for (const issue of candidateIssues) {
-        const issueVotes = votesByIssue.get(issue.id) ?? [];
-        const approvalCount = countApprovals(issueVotes);
-        if (approvalCount >= minimumVotes) {
+        if (approvedIdSet.has(issue.id)) {
             // Issue is approved
             const approvedIssue = {
                 ...issue,
-                votes: issueVotes,
                 approvedAt: now,
                 ticketPath: '' // Will be set when ticket is created
             };
@@ -65,8 +50,8 @@ export async function runArbitrator(options) {
 export function getArbitrationSummary(result) {
     const { approvedIssues, rejectedIssues, ticketsCreated } = result;
     const reportLines = [];
-    reportLines.push(`Arbitration Complete`);
-    reportLines.push(`-------------------`);
+    reportLines.push(`Summary`);
+    reportLines.push(`-------`);
     reportLines.push(`Total candidates: ${approvedIssues.length + rejectedIssues.length}`);
     reportLines.push(`Approved: ${approvedIssues.length}`);
     reportLines.push(`Rejected: ${rejectedIssues.length}`);
@@ -75,8 +60,7 @@ export function getArbitrationSummary(result) {
         reportLines.push('');
         reportLines.push('Approved Issues:');
         for (const issue of approvedIssues) {
-            const voteCount = countApprovals(issue.votes);
-            reportLines.push(`  - [${issue.severity.toUpperCase()}] ${issue.title} (${voteCount}/3 votes)`);
+            reportLines.push(`  - [${issue.severity.toUpperCase()}] ${issue.title}`);
         }
     }
     if (rejectedIssues.length > 0) {

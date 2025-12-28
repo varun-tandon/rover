@@ -222,7 +222,7 @@ export async function getFixDetails(targetPath, issueId) {
  * Push a branch to remote
  */
 async function pushBranch(worktreePath, branchName) {
-    const result = await execGit(['push', '--no-verify', '-u', 'origin', branchName], worktreePath);
+    const result = await execGit(['push', '-u', 'origin', branchName], worktreePath);
     if (result.code !== 0) {
         return { success: false, error: result.stderr };
     }

@@ -2,7 +2,6 @@ import { writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRoverDir } from './issues.js';
-import { countApprovals } from '../utils/votes.js';
 const TICKETS_DIR = 'tickets';
 const SEVERITY_FOLDERS = ['critical', 'high', 'medium', 'low'];
 export function getTicketsDir(targetPath, severity) {
@@ -97,10 +96,6 @@ export async function deleteTicketFile(targetPath, ticketId) {
     await unlink(ticketPath);
     return true;
 }
-function formatVote(vote, index) {
-    const status = vote.approve ? 'Approved' : 'Rejected';
-    return `- **Voter ${index + 1}**: ${status} - "${vote.reasoning}"`;
-}
 export function generateTicketMarkdown(issue, ticketId) {
     const markdownLines = [];
     // Header
@@ -136,20 +131,6 @@ export function generateTicketMarkdown(issue, ticketId) {
     markdownLines.push('## Recommendation');
     markdownLines.push('');
     markdownLines.push(issue.recommendation);
-    markdownLines.push('');
-    // Voting summary
-    markdownLines.push('## Voting Summary');
-    markdownLines.push('');
-    const approveCount = countApprovals(issue.votes);
-    const totalVotes = issue.votes.length;
-    markdownLines.push(`**Result**: ${approveCount}/${totalVotes} votes to approve`);
-    markdownLines.push('');
-    for (let i = 0; i < issue.votes.length; i++) {
-        const vote = issue.votes[i];
-        if (vote) {
-            markdownLines.push(formatVote(vote, i));
-        }
-    }
     markdownLines.push('');
     // Footer
     markdownLines.push('---');
@@ -255,20 +236,6 @@ export function generateConsolidatedTicketMarkdown(issue, ticketId, originalIds)
     markdownLines.push('## Recommendation');
     markdownLines.push('');
     markdownLines.push(issue.recommendation);
-    markdownLines.push('');
-    // Voting summary (merged from all original issues)
-    markdownLines.push('## Voting Summary');
-    markdownLines.push('');
-    const approveCount = countApprovals(issue.votes);
-    const totalVotes = issue.votes.length;
-    markdownLines.push(`**Result**: ${approveCount}/${totalVotes} votes to approve (merged)`);
-    markdownLines.push('');
-    for (let i = 0; i < issue.votes.length; i++) {
-        const vote = issue.votes[i];
-        if (vote) {
-            markdownLines.push(formatVote(vote, i));
-        }
-    }
     markdownLines.push('');
     // Footer
     markdownLines.push('---');

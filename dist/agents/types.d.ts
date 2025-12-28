@@ -1,4 +1,4 @@
-import type { CandidateIssue, Vote, ApprovedIssue, IssueSummary } from '../types/index.js';
+import type { CandidateIssue, ApprovedIssue, IssueSummary } from '../types/index.js';
 /**
  * Result from running the scanner agent
  */
@@ -9,17 +9,6 @@ export interface ScannerResult {
     durationMs: number;
     /** Files scanned */
     filesScanned: number;
-}
-/**
- * Result from a single voter
- */
-export interface VoterResult {
-    /** Voter ID */
-    voterId: string;
-    /** Votes cast by this voter */
-    votes: Vote[];
-    /** Duration in milliseconds */
-    durationMs: number;
 }
 /**
  * Result from the arbitrator
@@ -60,30 +49,37 @@ export interface ScannerOptions {
     onProgress?: (message: string) => void;
 }
 /**
- * Options for running a voter agent
+ * Result from the checker
  */
-export interface VoterOptions {
-    /** Voter ID (1, 2, or 3) */
-    voterId: string;
+export interface CheckerResult {
+    /** IDs of approved issues */
+    approvedIds: string[];
+    /** IDs of rejected issues */
+    rejectedIds: string[];
+    /** Duration in milliseconds */
+    durationMs: number;
+}
+/**
+ * Options for running the checker
+ */
+export interface CheckerOptions {
     /** Target directory for context */
     targetPath: string;
     /** Agent definition context */
     agentId: string;
-    /** Candidate issues to vote on */
+    /** Candidate issues to check */
     issues: CandidateIssue[];
     /**
-     * Callback for progress updates during voting.
+     * Callback for progress updates during batch checking.
      *
-     * Called by `runVoter` before and after voting on each issue:
-     * - Before voting: `onProgress(issueId, false)` - voting about to start
-     * - After voting: `onProgress(issueId, true)` - vote cast (approve or reject)
+     * Called by `runChecker` before and after checking each batch of issues:
+     * - Before checking: `onProgress(issueCount, false)` - batch checking about to start
+     * - After checking: `onProgress(issueCount, true)` - batch decisions made
      *
-     * Used to track real-time voting progress in the terminal UI.
-     *
-     * @param issueId - The ID of the issue being voted on
-     * @param completed - Whether the vote for this issue has been cast
+     * @param issueCount - The number of issues in this batch
+     * @param completed - Whether the check for this batch has completed
      */
-    onProgress?: (issueId: string, completed: boolean) => void;
+    onProgress?: (issueCount: number, completed: boolean) => void;
 }
 /**
  * Options for the arbitrator
@@ -93,8 +89,6 @@ export interface ArbitratorOptions {
     targetPath: string;
     /** All candidate issues */
     candidateIssues: CandidateIssue[];
-    /** All votes from all voters */
-    votes: Vote[];
-    /** Minimum votes needed for approval (default: 2 out of 3) */
-    minimumVotes?: number;
+    /** IDs of issues approved by the checker */
+    approvedIds: string[];
 }

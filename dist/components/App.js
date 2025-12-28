@@ -1,10 +1,10 @@
 import { jsxs as _jsxs, jsx as _jsx } from "react/jsx-runtime";
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Box, Text, useApp } from 'ink';
 import { ScanProgress } from './ScanProgress.js';
-import { VotingProgress } from './VotingProgress.js';
+import { CheckingProgress } from './CheckingProgress.js';
 import { Results } from './Results.js';
-import { getAgent, getAgentIds, runScanner, runVotersInParallel, runArbitrator } from '../agents/index.js';
+import { getAgent, getAgentIds, runScanner, runChecker, runArbitrator } from '../agents/index.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { throttle } from '../utils/throttle.js';
@@ -15,8 +15,11 @@ export function App({ command, targetPath, flags }) {
     const [error, setError] = useState(null);
     const [scanMessage, setScanMessage] = useState('Initializing...');
     const [candidateIssues, setCandidateIssues] = useState([]);
-    const [voterStatuses, setVoterStatuses] = useState([]);
-    const [votes, setVotes] = useState([]);
+    const [checkerStatus, setCheckerStatus] = useState({
+        status: 'pending',
+        issuesChecked: 0,
+        totalIssues: 0
+    });
     const [approvedIssues, setApprovedIssues] = useState([]);
     const [rejectedIssues, setRejectedIssues] = useState([]);
     const [ticketPaths, setTicketPaths] = useState([]);
@@ -31,29 +34,17 @@ export function App({ command, targetPath, flags }) {
     const throttledSetScanMessage = useRef(throttle((msg) => setScanMessage(msg), 200)).current;
     // Throttled cost setter for realtime cost updates
     const throttledSetScanCost = useRef(throttle((cost) => setScanCost(cost), 200)).current;
-    // Initialize voter statuses
-    const initVoterStatuses = useCallback((issueCount) => {
-        return [1, 2, 3].map(i => ({
-            id: `voter-${i}`,
-            status: 'pending',
-            votesCompleted: 0,
-            totalVotes: issueCount
+    // Ref to track issues checked (needed for batch updates)
+    const issuesCheckedRef = useRef(0);
+    // Throttled checker progress update - now accepts batch count
+    const throttledUpdateCheckerProgress = useRef(throttle((batchCount) => {
+        issuesCheckedRef.current += batchCount;
+        setCheckerStatus(prev => ({
+            ...prev,
+            status: 'checking',
+            issuesChecked: issuesCheckedRef.current
         }));
-    }, []);
-    // Update voter progress with throttling to avoid excessive re-renders.
-    // 300ms throttle (vs 200ms for scan messages) because voter status updates are less
-    // time-critical for user feedback and happen more frequently (3 voters x N issues).
-    const throttledIncrementVoterProgress = useRef(throttle((voterId) => {
-        setVoterStatuses(prev => prev.map(voterStatus => voterStatus.id === voterId
-            ? { ...voterStatus, status: 'voting', votesCompleted: voterStatus.votesCompleted + 1 }
-            : voterStatus));
     }, 300)).current;
-    // Callback for voter progress updates
-    const updateVoterProgress = useCallback((voterId, _issueId, completed) => {
-        if (completed) {
-            throttledIncrementVoterProgress(voterId);
-        }
-    }, [throttledIncrementVoterProgress]);
     // Main scan workflow
     useEffect(() => {
         async function runWorkflow() {
@@ -100,28 +91,37 @@ export function App({ command, targetPath, flags }) {
                     setPhase('complete');
                     return;
                 }
-                // Phase 2: Voting
-                setPhase('voting');
-                const initialStatuses = initVoterStatuses(scanResult.issues.length);
-                setVoterStatuses(initialStatuses);
-                // Start all voters with 'voting' status
-                setVoterStatuses(prev => prev.map(voterStatus => ({ ...voterStatus, status: 'voting' })));
-                const voterResults = await runVotersInParallel(resolvedPath, agentId, scanResult.issues, 3, updateVoterProgress);
-                // Mark all voters as complete and collect votes
-                setVoterStatuses(prev => prev.map(voterStatus => ({
-                    ...voterStatus,
+                // Phase 2: Checking
+                setPhase('checking');
+                setCheckerStatus({
+                    status: 'checking',
+                    issuesChecked: 0,
+                    totalIssues: scanResult.issues.length
+                });
+                // Reset issues checked ref before checking
+                issuesCheckedRef.current = 0;
+                const checkerResult = await runChecker({
+                    targetPath: resolvedPath,
+                    agentId,
+                    issues: scanResult.issues,
+                    onProgress: (batchCount, completed) => {
+                        if (completed) {
+                            throttledUpdateCheckerProgress(batchCount);
+                        }
+                    }
+                });
+                // Mark checker as complete
+                setCheckerStatus(prev => ({
+                    ...prev,
                     status: 'completed',
-                    votesCompleted: voterStatus.totalVotes
-                })));
-                const allVotes = voterResults.flatMap(voterResult => voterResult.votes);
-                setVotes(allVotes);
-                // Phase 3: Arbitration
-                setPhase('arbitrating');
+                    issuesChecked: prev.totalIssues
+                }));
+                // Phase 3: Save
+                setPhase('saving');
                 const arbitratorResult = await runArbitrator({
                     targetPath: resolvedPath,
                     candidateIssues: scanResult.issues,
-                    votes: allVotes,
-                    minimumVotes: 2
+                    approvedIds: checkerResult.approvedIds
                 });
                 setApprovedIssues(arbitratorResult.approvedIssues);
                 setRejectedIssues(arbitratorResult.rejectedIssues);
@@ -137,7 +137,7 @@ export function App({ command, targetPath, flags }) {
             }
         }
         runWorkflow();
-    }, [command, agentId, agent, resolvedPath, flags.dryRun, initVoterStatuses, updateVoterProgress, throttledSetScanMessage, throttledSetScanCost]);
+    }, [command, agentId, agent, resolvedPath, flags.dryRun, throttledSetScanMessage, throttledSetScanCost, throttledUpdateCheckerProgress]);
     // Auto-exit after completion
     useEffect(() => {
         if (phase === 'complete' || phase === 'error') {
@@ -154,5 +154,5 @@ export function App({ command, targetPath, flags }) {
     if (phase === 'init') {
         return (_jsx(Box, { marginY: 1, children: _jsx(Text, { dimColor: true, children: "Initializing Rover..." }) }));
     }
-    return (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { borderStyle: "round", borderColor: "cyan", padding: 1, marginBottom: 1, children: [_jsx(Text, { color: "cyan", bold: true, children: "ROVER" }), _jsx(Text, { children: " - AI Codebase Scanner" })] }), (phase === 'scanning' || phase === 'voting' || phase === 'arbitrating' || phase === 'complete') && (_jsx(ScanProgress, { agentName: agent?.name ?? agentId, targetPath: resolvedPath, message: scanMessage, isComplete: phase !== 'scanning', issueCount: candidateIssues.length, costUsd: scanCost })), (phase === 'voting' || phase === 'arbitrating' || phase === 'complete') && candidateIssues.length > 0 && (_jsx(VotingProgress, { issueCount: candidateIssues.length, voters: voterStatuses, isComplete: phase !== 'voting' })), phase === 'arbitrating' && (_jsx(Box, { marginY: 1, children: _jsx(Text, { color: "cyan", children: "Arbitrating votes and creating tickets..." }) })), phase === 'complete' && (_jsx(Results, { approvedIssues: approvedIssues, rejectedIssues: rejectedIssues, ticketPaths: ticketPaths, durationMs: totalDuration, totalCost: totalCost }))] }));
+    return (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { borderStyle: "round", borderColor: "cyan", padding: 1, marginBottom: 1, children: [_jsx(Text, { color: "cyan", bold: true, children: "ROVER" }), _jsx(Text, { children: " - AI Codebase Scanner" })] }), (phase === 'scanning' || phase === 'checking' || phase === 'saving' || phase === 'complete') && (_jsx(ScanProgress, { agentName: agent?.name ?? agentId, targetPath: resolvedPath, message: scanMessage, isComplete: phase !== 'scanning', issueCount: candidateIssues.length, costUsd: scanCost })), (phase === 'checking' || phase === 'saving' || phase === 'complete') && candidateIssues.length > 0 && (_jsx(CheckingProgress, { issueCount: candidateIssues.length, checker: checkerStatus, isComplete: phase !== 'checking' })), phase === 'saving' && (_jsx(Box, { marginY: 1, children: _jsx(Text, { color: "cyan", children: "Saving approved issues..." }) })), phase === 'complete' && (_jsx(Results, { approvedIssues: approvedIssues, rejectedIssues: rejectedIssues, ticketPaths: ticketPaths, durationMs: totalDuration, totalCost: totalCost }))] }));
 }
