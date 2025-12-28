@@ -36,7 +36,7 @@ This multi-agent validation reduces false positives and ensures issues are worth
 ## Requirements
 
 - Node.js
-- `ANTHROPIC_API_KEY` environment variable
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 
 ## Installation
 
@@ -56,9 +56,6 @@ pnpm build
 ## Quick Start
 
 ```bash
-# Set your API key
-export ANTHROPIC_API_KEY=your-key-here
-
 # Scan current directory with the default agent (security-auditor)
 rover scan .
 
