@@ -4,6 +4,22 @@ AI-powered codebase scanner with multi-agent validation.
 
 Rover scans your codebase using 33 specialized AI agents to detect code quality issues, security vulnerabilities, architectural problems, and anti-patterns. Issues are validated through a 3-phase consensus pipeline before being saved as tickets.
 
+## TL;DR
+
+```bash
+# 1. Scan - detect issues with AI agents
+rover scan . --all
+
+# 2. Plan - prioritize and see dependencies
+rover plan
+
+# 3. Fix - auto-fix issues with Claude
+rover fix ISSUE-001 ISSUE-002 ISSUE-003
+
+# 4. PR - create pull requests
+rover review submit --all
+```
+
 ## How It Works
 
 Scans use a 3-phase AI pipeline:
