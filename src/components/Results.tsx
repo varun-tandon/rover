@@ -1,7 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { ApprovedIssue, CandidateIssue } from '../types/index.js';
-import { countApprovals } from '../utils/votes.js';
 
 interface IssueCardProps {
   issue: ApprovedIssue;
@@ -24,8 +23,6 @@ function IssueCard({ issue, ticketPath }: IssueCardProps) {
     }
   };
 
-  const voteCount = countApprovals(issue.votes);
-
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" padding={1} marginBottom={1}>
       <Box gap={1}>
@@ -46,11 +43,6 @@ function IssueCard({ issue, ticketPath }: IssueCardProps) {
         {issue.lineRange && (
           <Text dimColor>:{issue.lineRange.start}-{issue.lineRange.end}</Text>
         )}
-      </Box>
-
-      <Box>
-        <Text dimColor>Votes: </Text>
-        <Text color="green">{voteCount}/3 approved</Text>
       </Box>
 
       <Box>

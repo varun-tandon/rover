@@ -17,6 +17,7 @@ import {
   type BatchRunState,
   type AgentResultSummary
 } from '../storage/run-state.js';
+import { ProgressBar } from './ProgressBar.js';
 
 interface BatchAppProps {
   targetPath: string;
@@ -33,6 +34,9 @@ interface AgentStatus {
   agentId: string;
   agentName: string;
   status: 'pending' | 'running' | 'complete' | 'error';
+  phase: 'scanning' | 'checking' | 'saving';
+  issuesChecked: number;
+  issuesToCheck: number;
   candidateIssues: number;
   approvedIssues: number;
 }
@@ -117,6 +121,9 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
           agentId: id,
           agentName: existingAgent?.agentName ?? getAgent(id)?.name ?? id,
           status: skipSet.has(id) ? 'complete' : 'pending',
+          phase: 'scanning' as const,
+          issuesChecked: 0,
+          issuesToCheck: 0,
           candidateIssues: existingAgent?.result?.candidateIssues ?? 0,
           approvedIssues: existingAgent?.result?.approvedIssues ?? 0
         };
@@ -130,10 +137,17 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
           skipAgentIds,
           onProgress: (progress) => {
             throttledSetProgress(progress);
-            // Update agent status to running
+            // Update agent status with phase and checking progress
             setAgentStatuses(prev => prev.map(s =>
               s.agentId === progress.agentId
-                ? { ...s, status: 'running' as const, agentName: progress.agentName }
+                ? {
+                    ...s,
+                    status: 'running' as const,
+                    agentName: progress.agentName,
+                    phase: progress.phase,
+                    issuesChecked: progress.issuesChecked ?? s.issuesChecked,
+                    issuesToCheck: progress.issuesToCheck ?? s.issuesToCheck
+                  }
                 : s
             ));
           },
@@ -251,7 +265,21 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
               {runningAgents.map(agent => (
                 <Box key={agent.agentId} gap={1}>
                   <Text color="cyan"><Spinner type="dots" /></Text>
-                  <Text>{agent.agentName}</Text>
+                  <Box width={28}>
+                    <Text>{agent.agentName}</Text>
+                  </Box>
+                  {agent.phase === 'scanning' && (
+                    <Text dimColor>Scanning...</Text>
+                  )}
+                  {agent.phase === 'checking' && agent.issuesToCheck > 0 && (
+                    <ProgressBar
+                      current={agent.issuesChecked}
+                      total={agent.issuesToCheck}
+                    />
+                  )}
+                  {agent.phase === 'saving' && (
+                    <Text dimColor>Saving...</Text>
+                  )}
                 </Box>
               ))}
             </Box>

@@ -314,7 +314,7 @@ async function pushBranch(
   worktreePath: string,
   branchName: string
 ): Promise<{ success: boolean; error?: string }> {
-  const result = await execGit(['push', '--no-verify', '-u', 'origin', branchName], worktreePath);
+  const result = await execGit(['push', '-u', 'origin', branchName], worktreePath);
 
   if (result.code !== 0) {
     return { success: false, error: result.stderr };

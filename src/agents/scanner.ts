@@ -74,7 +74,7 @@ Each issue in the array should have:
 - recommendation: Specific actionable fix
 - codeSnippet: The problematic code (optional)
 
-Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
+CRITICAL: Output ONLY the JSON object. Do not include any text, reasoning, or markdown before or after the JSON. Start your response with { and end with }.`;
 
   try {
     const result = await runAgent({
@@ -88,11 +88,16 @@ Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
 
     // Parse the result
     if (resultText) {
-      try {
-        // Try to extract JSON from the result
-        const jsonMatch = resultText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const parsedScannerOutput = JSON.parse(jsonMatch[0]) as { issues?: unknown[] };
+      // Preprocessing: strip markdown code blocks that LLMs sometimes add
+      const cleanText = resultText
+        .replace(/```json\s*/g, '')
+        .replace(/```\s*/g, '')
+        .trim();
+
+      // Helper to parse issues from a JSON object
+      const parseIssuesFromJson = (jsonStr: string): boolean => {
+        try {
+          const parsedScannerOutput = JSON.parse(jsonStr) as { issues?: unknown[] };
           if (Array.isArray(parsedScannerOutput.issues)) {
             issues = parsedScannerOutput.issues.map((issue, index) => ({
               id: (issue as { id?: string }).id ?? `issue-${index}`,
@@ -106,10 +111,51 @@ Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
               recommendation: (issue as { recommendation?: string }).recommendation ?? '',
               codeSnippet: (issue as { codeSnippet?: string }).codeSnippet,
             }));
+            return true;
+          }
+        } catch {
+          // Parsing failed, will try next approach
+        }
+        return false;
+      };
+
+      // Try multiple extraction strategies in order of preference
+      let parsed = false;
+
+      // Strategy 1: Try to find balanced JSON starting from { "issues" (with flexible whitespace)
+      const issuesMatch = cleanText.match(/\{\s*"issues"/);
+      if (!parsed && issuesMatch) {
+        const issuesStart = cleanText.indexOf(issuesMatch[0]);
+        // Find matching closing brace by counting brace depth
+        let depth = 0;
+        let endIndex = -1;
+        for (let i = issuesStart; i < cleanText.length; i++) {
+          if (cleanText[i] === '{') depth++;
+          else if (cleanText[i] === '}') {
+            depth--;
+            if (depth === 0) {
+              endIndex = i + 1;
+              break;
+            }
           }
         }
-      } catch (parseError) {
-        console.error('Failed to parse scanner result:', parseError);
+        if (endIndex !== -1) {
+          parsed = parseIssuesFromJson(cleanText.slice(issuesStart, endIndex));
+        }
+      }
+
+      // Strategy 2: Fallback to greedy regex on cleaned text (last resort)
+      if (!parsed) {
+        const fallbackMatch = cleanText.match(/\{[\s\S]*\}/);
+        if (fallbackMatch) {
+          parsed = parseIssuesFromJson(fallbackMatch[0]);
+        }
+      }
+
+      if (!parsed && cleanText.trim().length > 0) {
+        // Log context about what failed to parse
+        const preview = cleanText.slice(0, 300).replace(/\n/g, '\\n');
+        console.error(`Failed to parse scanner result. Preview: ${preview}...`);
       }
     }
   } catch (error) {

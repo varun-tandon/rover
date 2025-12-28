@@ -11,7 +11,7 @@
  * @param delay - Minimum time between executions in milliseconds.
  *   Chosen based on use case:
  *   - 150-200ms: UI updates where responsiveness matters (scan progress)
- *   - 300ms: Less critical updates that happen frequently (voter progress)
+ *   - 300ms: Less critical updates that happen frequently (checker progress)
  * @returns A throttled version of the function with the same signature
  *
  * @example

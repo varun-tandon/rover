@@ -68,20 +68,6 @@ function getHighestSeverity(issues: ApprovedIssue[]): IssueSeverity {
 }
 
 /**
- * Merge votes from multiple issues
- */
-function mergeVotes(issues: ApprovedIssue[]): ApprovedIssue['votes'] {
-  const allVotes = issues.flatMap(i => i.votes);
-  // Deduplicate by voterId, keeping the first vote from each voter
-  const seenVoters = new Set<string>();
-  return allVotes.filter(vote => {
-    if (seenVoters.has(vote.voterId)) return false;
-    seenVoters.add(vote.voterId);
-    return true;
-  });
-}
-
-/**
  * Run the consolidator agent to merge a cluster of related issues.
  */
 export async function runConsolidator(options: ConsolidatorOptions): Promise<ConsolidatorResult> {
@@ -180,7 +166,6 @@ Return ONLY the JSON object. No markdown, no explanations.`;
       category: parsed.category ?? firstIssue.category,
       recommendation: parsed.recommendation ?? cluster.issues.map(i => i.recommendation).join('\n'),
       codeSnippet: parsed.codeSnippet,
-      votes: mergeVotes(cluster.issues),
       approvedAt: new Date().toISOString()
     };
 

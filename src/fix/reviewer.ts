@@ -17,6 +17,8 @@ const ARCHITECTURE_REVIEW_PROMPT_PATH = process.env['ROVER_REVIEW_PROMPT_PATH']
   ?? join(__dirname, 'prompts', 'review-prompt.txt');
 const BUG_REVIEW_PROMPT_PATH = process.env['ROVER_BUG_REVIEW_PROMPT_PATH']
   ?? join(__dirname, 'prompts', 'bug-review-prompt.txt');
+const COMPLETENESS_REVIEW_PROMPT_PATH = process.env['ROVER_COMPLETENESS_REVIEW_PROMPT_PATH']
+  ?? join(__dirname, 'prompts', 'completeness-review-prompt.txt');
 
 /**
  * Get the default branch name (main, master, etc.)
@@ -252,11 +254,12 @@ interface ReviewOptions {
   issueContent?: string;
 }
 
-type ReviewType = 'architecture' | 'bug';
+type ReviewType = 'architecture' | 'bug' | 'completeness';
 
 interface FullReviewResult {
   architectureReview: string;
   bugReview: string;
+  completenessReview: string;
   combined: string;
 }
 
@@ -271,11 +274,22 @@ async function runSingleReview(
 ): Promise<string> {
   const { onProgress, verbose, issueContent } = options;
 
+  // Completeness review requires issue content
+  if (reviewType === 'completeness' && !issueContent) {
+    throw new Error('Completeness review requires issue content');
+  }
+
   // Select the appropriate prompt based on review type
   const promptPath = reviewType === 'architecture'
     ? ARCHITECTURE_REVIEW_PROMPT_PATH
-    : BUG_REVIEW_PROMPT_PATH;
-  const reviewLabel = reviewType === 'architecture' ? 'Architecture Review' : 'Bug Review';
+    : reviewType === 'bug'
+      ? BUG_REVIEW_PROMPT_PATH
+      : COMPLETENESS_REVIEW_PROMPT_PATH;
+  const reviewLabel = reviewType === 'architecture'
+    ? 'Architecture Review'
+    : reviewType === 'bug'
+      ? 'Bug Review'
+      : 'Completeness Review';
 
   // Read the review prompt template
   const reviewPromptTemplate = await readFile(promptPath, 'utf-8');
@@ -296,8 +310,28 @@ async function runSingleReview(
     return 'No changes to review. LGTM.';
   }
 
-  // Construct the review prompt
-  const issueSection = issueContent ? `
+  // Construct the review prompt based on review type
+  let prompt: string;
+
+  if (reviewType === 'completeness') {
+    // Completeness review has a different structure - issue content is primary
+    prompt = `${reviewPromptTemplate}
+
+ORIGINAL ISSUE TO VERIFY:
+${issueContent}
+
+CHANGED FILES:
+${changedFiles.join('\n')}
+
+DIFF:
+\`\`\`diff
+${diff}
+\`\`\`
+
+Verify that ALL items from the original issue have been addressed by these changes. Output your findings in the format specified above.`;
+  } else {
+    // Architecture and bug reviews use the standard structure
+    const issueSection = issueContent ? `
 ORIGINAL ISSUE TO FIX:
 ${issueContent}
 
@@ -305,7 +339,7 @@ CRITICAL: In addition to general code review, you MUST verify that ALL items in 
 
 ` : '';
 
-  const prompt = `${reviewPromptTemplate}
+    prompt = `${reviewPromptTemplate}
 
 ${issueSection}CHANGED FILES:
 ${changedFiles.join('\n')}
@@ -316,6 +350,7 @@ ${diff}
 \`\`\`
 
 Please review the changes above according to the guidelines provided.${issueContent ? ' Pay special attention to whether ALL requirements from the original issue have been addressed.' : ''}`;
+  }
 
   // Run Claude CLI for the review with read-only tools
   return new Promise((resolve, reject) => {
@@ -447,16 +482,29 @@ export async function runBugReview(
 }
 
 /**
- * Run both architecture and bug reviews
- * Both reviews must pass for the fix to be considered complete
+ * Run completeness review
+ * Verifies that ALL items from the original issue have been addressed
+ * Requires issueContent to be provided
+ */
+export async function runCompletenessReview(
+  worktreePath: string,
+  options: ReviewOptions & { issueContent: string }
+): Promise<string> {
+  return runSingleReview(worktreePath, 'completeness', options);
+}
+
+/**
+ * Run architecture, bug, and completeness reviews
+ * All reviews must pass for the fix to be considered complete
+ * Completeness review only runs if issueContent is provided
  */
 export async function runFullReview(
   worktreePath: string,
   options: ReviewOptions = {}
 ): Promise<FullReviewResult> {
-  const { onProgress } = options;
+  const { onProgress, issueContent } = options;
 
-  // Run both reviews sequentially to avoid resource contention
+  // Run reviews sequentially to avoid resource contention
   if (onProgress) {
     onProgress('[Full Review] Starting architecture review...');
   }
@@ -467,18 +515,36 @@ export async function runFullReview(
   }
   const bugReview = await runSingleReview(worktreePath, 'bug', options);
 
+  // Run completeness review only if issue content is provided
+  let completenessReview = '';
+  if (issueContent) {
+    if (onProgress) {
+      onProgress('[Full Review] Starting completeness review...');
+    }
+    completenessReview = await runSingleReview(worktreePath, 'completeness', options);
+  }
+
   // Combine the reviews
+  const completenessSection = completenessReview
+    ? `
+
+## Completeness Review
+
+${completenessReview}`
+    : '';
+
   const combined = `## Architecture Review
 
 ${architectureReview}
 
 ## Bug Review
 
-${bugReview}`;
+${bugReview}${completenessSection}`;
 
   return {
     architectureReview,
     bugReview,
+    completenessReview,
     combined,
   };
 }

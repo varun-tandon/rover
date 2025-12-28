@@ -70,6 +70,26 @@ You are reviewing code changes for bugs, errors, and implementation mistakes. Fo
 5. Use the Read tool to examine full file context when needed
 6. Report only actual bugs, not style preferences or suggestions
 
+## CRITICAL: System-Wide Completeness Check
+
+Before concluding your review, you MUST verify the change is complete across the system:
+
+1. **Find Sibling Files**: Use Glob/Grep to find files that serve a similar purpose to the changed files:
+   - If an API endpoint was changed, find other endpoints in the same directory or that handle similar data
+   - If a component pattern was changed, find other components using the same pattern
+   - If a utility was centralized, find all files that should now use it
+
+2. **Check for Incomplete Migrations**: The most dangerous bugs are partial changes:
+   - Security added to one endpoint but not sibling endpoints = CRITICAL security bypass
+   - Pattern centralized but old pattern still exists elsewhere = inconsistency bug
+   - Refactor applied to some files but not all = maintenance nightmare
+
+3. **Flag Inconsistencies**: If the change creates inconsistency with related/sibling code, flag it as CRITICAL:
+   - "Auth added to intersection-data but area-data and road-data have no auth - security bypass"
+   - "ChartJS.register centralized but 9 components still have redundant registrations"
+
+A change that is correct in isolation but incomplete across the system is a bug.
+
 ## Output Format
 
 Report bugs in this format:

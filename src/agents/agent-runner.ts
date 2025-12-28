@@ -1,5 +1,5 @@
 /**
- * Claude CLI interaction for agent tasks (scanner, voter, planner, etc.)
+ * Claude CLI interaction for agent tasks (scanner, checker, planner, etc.)
  *
  * This is a simpler wrapper than claude-runner.ts which is specific to the fix workflow.
  * Agents don't need session management, markers, or iterative loops.
@@ -101,7 +101,7 @@ function parseToolUsage(line: string): string | null {
 }
 
 /**
- * Run Claude CLI for agent tasks (scanner, voter, planner, etc.)
+ * Run Claude CLI for agent tasks (scanner, checker, planner, etc.)
  */
 export async function runAgent(options: AgentRunnerOptions): Promise<AgentRunnerResult> {
   const { prompt, cwd, allowedTools, model = 'opus', onProgress } = options;

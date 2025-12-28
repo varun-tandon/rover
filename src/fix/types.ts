@@ -73,6 +73,7 @@ export interface ReviewAnalysis {
 export interface ReviewTrace {
   architectureOutput: string;
   bugOutput: string;
+  completenessOutput: string;
   combinedOutput: string;
   parsedItems: ReviewItem[];
   actionableCount: number;
@@ -103,4 +104,60 @@ export interface FixTrace {
   iterations: IterationTrace[];
   finalStatus: FixStatus;
   error?: string;
+}
+
+/**
+ * Options for batch fixing multiple issues in a single branch
+ */
+export interface BatchFixOptions {
+  targetPath: string;
+  issueIds: string[];
+  maxIterations: number;
+  verbose: boolean;
+}
+
+/**
+ * Result from fixing a single issue within a batch
+ */
+export interface BatchIssueResult {
+  issueId: string;
+  status: 'success' | 'skipped' | 'error';
+  error?: string;
+}
+
+/**
+ * Result from a batch fix operation
+ */
+export interface BatchFixResult {
+  /** Branch name for the combined fix */
+  branchName: string;
+  /** Path to the worktree */
+  worktreePath: string;
+  /** Results for each issue in the batch */
+  issueResults: BatchIssueResult[];
+  /** Overall status */
+  status: 'success' | 'partial' | 'error';
+  /** Number of successful fixes */
+  successCount: number;
+  /** Number of skipped/failed fixes */
+  failedCount: number;
+  /** Total iterations used in final review */
+  iterations: number;
+  /** Duration in milliseconds */
+  durationMs: number;
+  /** Error message if overall failure */
+  error?: string;
+}
+
+/**
+ * Progress update during batch fix
+ */
+export interface BatchFixProgress {
+  phase: 'worktree' | 'fixing' | 'reviewing' | 'complete' | 'error';
+  currentIssueId?: string;
+  currentIssueIndex?: number;
+  totalIssues: number;
+  message: string;
+  iteration?: number;
+  maxIterations?: number;
 }

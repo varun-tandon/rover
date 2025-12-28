@@ -1,8 +1,8 @@
-import type { CandidateIssue, Vote, ApprovedIssue } from '../types/index.js';
-import type { ScannerResult, VoterResult, ArbitratorResult } from './types.js';
+import type { CandidateIssue, ApprovedIssue } from '../types/index.js';
+import type { ScannerResult, CheckerResult, ArbitratorResult } from './types.js';
 import { getAgentIds, getAgent } from './definitions/index.js';
 import { runScanner } from './scanner.js';
-import { runVotersInParallel } from './voter.js';
+import { runChecker } from './checker.js';
 import { runArbitrator } from './arbitrator.js';
 import { getExistingIssueSummaries } from '../storage/issues.js';
 import type { AgentRunStatus, AgentResultSummary } from '../storage/run-state.js';
@@ -13,7 +13,7 @@ import type { AgentRunStatus, AgentResultSummary } from '../storage/run-state.js
  */
 export interface BatchProgress {
   /** Current phase of the pipeline for this agent */
-  phase: 'scanning' | 'voting' | 'arbitrating';
+  phase: 'scanning' | 'checking' | 'saving';
   /** Unique identifier of the agent currently being processed */
   agentId: string;
   /** Human-readable name of the agent */
@@ -24,10 +24,14 @@ export interface BatchProgress {
   totalAgents: number;
   /** Human-readable status message describing current activity */
   message: string;
+  /** Number of issues checked (only present during 'checking' phase) */
+  issuesChecked?: number;
+  /** Total issues to check (only present during 'checking' phase) */
+  issuesToCheck?: number;
 }
 
 /**
- * Complete result from running a single agent through the scan-vote-arbitrate pipeline.
+ * Complete result from running a single agent through the scan-check-save pipeline.
  * Contains all outputs from each phase plus metadata about the agent.
  */
 export interface AgentResult {
@@ -37,9 +41,9 @@ export interface AgentResult {
   agentName: string;
   /** Results from the scanning phase (candidate issues found) */
   scanResult: ScannerResult;
-  /** Results from each voter (votes on candidate issues) */
-  voterResults: VoterResult[];
-  /** Final arbitration results (approved/rejected issues, tickets created) */
+  /** Results from the checker (approved/rejected issue IDs) */
+  checkerResult: CheckerResult;
+  /** Final results (approved/rejected issues, tickets created) */
   arbitratorResult: ArbitratorResult;
   /** Error message if the agent failed during execution. When set, other results may be empty. */
   error?: string;
@@ -54,9 +58,9 @@ export interface BatchRunResult {
   agentResults: AgentResult[];
   /** Total number of candidate issues found across all agents */
   totalCandidateIssues: number;
-  /** Total number of issues that passed voting and were approved */
+  /** Total number of issues that passed checking and were approved */
   totalApprovedIssues: number;
-  /** Total number of issues that were rejected by voters */
+  /** Total number of issues that were rejected by the checker */
   totalRejectedIssues: number;
   /** Total number of ticket files created */
   totalTickets: number;
@@ -106,12 +110,22 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Run a single agent through the full pipeline (scan -> vote -> arbitrate)
+ * Progress callback for single agent execution with phase and checking details.
+ */
+interface SingleAgentProgress {
+  phase: 'scanning' | 'checking' | 'saving';
+  message: string;
+  issuesChecked?: number;
+  issuesToCheck?: number;
+}
+
+/**
+ * Run a single agent through the full pipeline (scan -> check -> save)
  */
 async function runSingleAgent(
   agentId: string,
   targetPath: string,
-  onProgress?: (message: string) => void,
+  onProgress?: (progress: SingleAgentProgress) => void,
   retryCount = 0
 ): Promise<AgentResult> {
   const agent = getAgent(agentId);
@@ -124,21 +138,21 @@ async function runSingleAgent(
     const existingIssues = await getExistingIssueSummaries(targetPath);
 
     // Phase 1: Scan
-    onProgress?.(`[${agent.name}] Scanning...`);
+    onProgress?.({ phase: 'scanning', message: `[${agent.name}] Scanning...` });
     const scanResult = await runScanner({
       targetPath,
       agentId,
       existingIssues,
-      onProgress: (msg) => onProgress?.(`[${agent.name}] ${msg}`)
+      onProgress: (msg) => onProgress?.({ phase: 'scanning', message: `[${agent.name}] ${msg}` })
     });
 
-    // If no issues found, skip voting
+    // If no issues found, skip checking
     if (scanResult.issues.length === 0) {
       return {
         agentId,
         agentName: agent.name,
         scanResult,
-        voterResults: [],
+        checkerResult: { approvedIds: [], rejectedIds: [], durationMs: 0 },
         arbitratorResult: {
           approvedIssues: [],
           rejectedIssues: [],
@@ -147,43 +161,52 @@ async function runSingleAgent(
       };
     }
 
-    // Phase 2: Vote
-    onProgress?.(`[${agent.name}] Voting on ${scanResult.issues.length} issues...`);
-    const voterResults = await runVotersInParallel(
+    // Phase 2: Check
+    const totalIssues = scanResult.issues.length;
+    let issuesChecked = 0;
+    onProgress?.({
+      phase: 'checking',
+      message: `[${agent.name}] Checking issues...`,
+      issuesChecked: 0,
+      issuesToCheck: totalIssues
+    });
+
+    const checkerResult = await runChecker({
       targetPath,
       agentId,
-      scanResult.issues,
-      3,
-      (voterId, issueId, completed) => {
+      issues: scanResult.issues,
+      onProgress: (batchCount, completed) => {
         if (completed) {
-          onProgress?.(`[${agent.name}] ${voterId} finished voting on ${issueId}`);
-        } else {
-          onProgress?.(`[${agent.name}] ${voterId} voting on ${issueId}...`);
+          issuesChecked += batchCount;
+          onProgress?.({
+            phase: 'checking',
+            message: `[${agent.name}] Checking issues...`,
+            issuesChecked,
+            issuesToCheck: totalIssues
+          });
         }
       }
-    );
+    });
 
-    // Phase 3: Arbitrate
-    onProgress?.(`[${agent.name}] Arbitrating...`);
-    const allVotes = voterResults.flatMap(r => r.votes);
+    // Phase 3: Save approved issues
+    onProgress?.({ phase: 'saving', message: `[${agent.name}] Saving approved issues...` });
     const arbitratorResult = await runArbitrator({
       targetPath,
       candidateIssues: scanResult.issues,
-      votes: allVotes,
-      minimumVotes: 2
+      approvedIds: checkerResult.approvedIds
     });
 
     return {
       agentId,
       agentName: agent.name,
       scanResult,
-      voterResults,
+      checkerResult,
       arbitratorResult
     };
   } catch (error) {
     // Retry on transient errors
     if (isTransientError(error) && retryCount < MAX_RETRIES) {
-      onProgress?.(`[${agent.name}] Transient error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
+      onProgress?.({ phase: 'scanning', message: `[${agent.name}] Transient error, retrying (${retryCount + 1}/${MAX_RETRIES})...` });
       await sleep(RETRY_DELAY_MS * (retryCount + 1));
       return runSingleAgent(agentId, targetPath, onProgress, retryCount + 1);
     }
@@ -193,7 +216,7 @@ async function runSingleAgent(
 
 /**
  * Orchestrates batch scanning of a codebase using multiple agents with a work queue pattern.
- * Each agent runs through the full pipeline: scan -> vote -> arbitrate.
+ * Each agent runs through the full pipeline: scan -> check -> save.
  *
  * @param targetPath - Absolute path to the codebase directory to scan
  * @param agentIds - List of specific agent IDs to run, or 'all' to run all registered agents
@@ -253,14 +276,16 @@ export async function runAgentsBatched(
       // Notify state change: running
       onStateChange?.(agentId, 'running');
 
-      const progressCallback = (message: string) => {
+      const progressCallback = (progress: SingleAgentProgress) => {
         onProgress?.({
-          phase: 'scanning',
+          phase: progress.phase,
           agentId,
           agentName: agent?.name ?? agentId,
           completedCount,
           totalAgents,
-          message
+          message: progress.message,
+          issuesChecked: progress.issuesChecked,
+          issuesToCheck: progress.issuesToCheck
         });
       };
 
@@ -279,7 +304,7 @@ export async function runAgentsBatched(
           agentId,
           agentName: agent?.name ?? agentId,
           scanResult: { issues: [], durationMs: 0, filesScanned: 0 },
-          voterResults: [],
+          checkerResult: { approvedIds: [], rejectedIds: [], durationMs: 0 },
           arbitratorResult: { approvedIssues: [], rejectedIssues: [], ticketsCreated: [] },
           error: errorMessage
         };

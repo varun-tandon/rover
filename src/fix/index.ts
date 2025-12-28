@@ -12,6 +12,10 @@ import type {
   ReviewItem,
   FixTrace,
   IterationTrace,
+  BatchFixOptions,
+  BatchFixResult,
+  BatchIssueResult,
+  BatchFixProgress,
 } from './types.js';
 import { createWorktree, generateUniqueBranchName, removeWorktree } from './worktree.js';
 import { runClaude, buildInitialFixPrompt, buildIterationPrompt, isAlreadyFixed, isReviewNotApplicable, extractDismissalJustification } from './claude-runner.js';
@@ -426,6 +430,7 @@ async function fixSingleIssue(
     iterationTrace.review = {
       architectureOutput: fullReview.architectureReview,
       bugOutput: fullReview.bugReview,
+      completenessOutput: fullReview.completenessReview,
       combinedOutput: fullReview.combined,
       parsedItems: analysis.items,
       actionableCount: analysis.items.filter(
@@ -594,4 +599,402 @@ export async function runFix(
 
   // Combine error results (for issues that weren't found) with fix results
   return [...errorResults, ...results];
+}
+
+/**
+ * Fix a single issue within a batch (no worktree creation, no review)
+ * Returns whether the fix was successful
+ */
+async function fixIssueInBatch(
+  issue: IssueContext,
+  worktreePath: string,
+  verbose: boolean,
+  onProgress: (msg: string) => void
+): Promise<BatchIssueResult> {
+  const prompt = buildInitialFixPrompt(issue.id, issue.content);
+
+  let retryCount = 0;
+  while (retryCount <= MAX_RETRIES) {
+    try {
+      const claudeResult = await runClaude({
+        prompt,
+        cwd: worktreePath,
+        verbose,
+        onProgress,
+      });
+
+      if (claudeResult.exitCode !== 0) {
+        return {
+          issueId: issue.id,
+          status: 'error',
+          error: `Claude exited with code ${claudeResult.exitCode}`,
+        };
+      }
+
+      // Check if issue was already fixed
+      if (isAlreadyFixed(claudeResult.output)) {
+        return {
+          issueId: issue.id,
+          status: 'skipped',
+          error: 'Issue already fixed',
+        };
+      }
+
+      return {
+        issueId: issue.id,
+        status: 'success',
+      };
+    } catch (error) {
+      retryCount++;
+      if (retryCount > MAX_RETRIES) {
+        return {
+          issueId: issue.id,
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+      await sleep(RETRY_DELAY_MS * retryCount);
+    }
+  }
+
+  return {
+    issueId: issue.id,
+    status: 'error',
+    error: 'Exhausted retries',
+  };
+}
+
+/**
+ * Run batch fix workflow: fix multiple issues on a single branch with one review at the end.
+ *
+ * Flow:
+ * 1. Create single worktree/branch for all issues
+ * 2. Fix each issue sequentially (no review between issues)
+ * 3. Run single combined review at the end
+ * 4. If review has issues, iterate (fix all remaining, review again)
+ */
+export async function runBatchFix(
+  options: BatchFixOptions,
+  onProgress: (progress: BatchFixProgress) => void
+): Promise<BatchFixResult> {
+  const { targetPath, issueIds, maxIterations, verbose } = options;
+  const resolvedPath = resolve(targetPath);
+  const startTime = Date.now();
+
+  // Load all issues first
+  const issues: IssueContext[] = [];
+  const loadErrors: BatchIssueResult[] = [];
+
+  for (const issueId of issueIds) {
+    try {
+      const issue = await loadIssueContext(resolvedPath, issueId);
+      issues.push(issue);
+    } catch {
+      loadErrors.push({
+        issueId,
+        status: 'error',
+        error: `Issue not found: ${issueId}`,
+      });
+    }
+  }
+
+  if (issues.length === 0) {
+    return {
+      branchName: '',
+      worktreePath: '',
+      issueResults: loadErrors,
+      status: 'error',
+      successCount: 0,
+      failedCount: loadErrors.length,
+      iterations: 0,
+      durationMs: Date.now() - startTime,
+      error: 'No valid issues to fix',
+    };
+  }
+
+  // Generate branch name based on first issue
+  const firstIssue = issues[0];
+  if (!firstIssue) {
+    return {
+      branchName: '',
+      worktreePath: '',
+      issueResults: loadErrors,
+      status: 'error',
+      successCount: 0,
+      failedCount: loadErrors.length,
+      iterations: 0,
+      durationMs: Date.now() - startTime,
+      error: 'No valid issues to fix',
+    };
+  }
+  const baseBranchName = `fix/batch-${firstIssue.id}`;
+  let branchName: string;
+
+  try {
+    branchName = await generateUniqueBranchName(resolvedPath, baseBranchName);
+  } catch (error) {
+    return {
+      branchName: baseBranchName,
+      worktreePath: '',
+      issueResults: issues.map(i => ({
+        issueId: i.id,
+        status: 'error' as const,
+        error: 'Failed to generate branch name',
+      })),
+      status: 'error',
+      successCount: 0,
+      failedCount: issues.length,
+      iterations: 0,
+      durationMs: Date.now() - startTime,
+      error: `Failed to generate branch name: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  // Create worktree
+  onProgress({
+    phase: 'worktree',
+    totalIssues: issues.length,
+    message: `Creating worktree with branch ${branchName}...`,
+  });
+
+  let worktreePath: string;
+  try {
+    worktreePath = await createWorktree(resolvedPath, branchName);
+  } catch (error) {
+    return {
+      branchName,
+      worktreePath: '',
+      issueResults: issues.map(i => ({
+        issueId: i.id,
+        status: 'error' as const,
+        error: 'Failed to create worktree',
+      })),
+      status: 'error',
+      successCount: 0,
+      failedCount: issues.length,
+      iterations: 0,
+      durationMs: Date.now() - startTime,
+      error: `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  // Fix each issue sequentially
+  const issueResults: BatchIssueResult[] = [...loadErrors];
+  let successCount = 0;
+  let combinedIssueContent = '';
+
+  for (const [i, issue] of issues.entries()) {
+    onProgress({
+      phase: 'fixing',
+      currentIssueId: issue.id,
+      currentIssueIndex: i + 1,
+      totalIssues: issues.length,
+      message: `Fixing issue ${i + 1}/${issues.length}: ${issue.id}...`,
+    });
+
+    const result = await fixIssueInBatch(
+      issue,
+      worktreePath,
+      verbose,
+      (msg) => onProgress({
+        phase: 'fixing',
+        currentIssueId: issue.id,
+        currentIssueIndex: i + 1,
+        totalIssues: issues.length,
+        message: msg,
+      })
+    );
+
+    issueResults.push(result);
+    if (result.status === 'success') {
+      successCount++;
+      combinedIssueContent += `\n\n---\n## Issue: ${issue.id}\n${issue.content}`;
+    }
+  }
+
+  // If no issues were fixed successfully, we're done
+  if (successCount === 0) {
+    try {
+      await removeWorktree(resolvedPath, worktreePath);
+    } catch {
+      // Ignore cleanup errors
+    }
+
+    return {
+      branchName,
+      worktreePath: '',
+      issueResults,
+      status: 'error',
+      successCount: 0,
+      failedCount: issueResults.filter(r => r.status !== 'success').length,
+      iterations: 0,
+      durationMs: Date.now() - startTime,
+      error: 'No issues were successfully fixed',
+    };
+  }
+
+  // Run combined review at the end
+  let lastActionableItems: ReviewItem[] = [];
+
+  for (let iteration = 1; iteration <= maxIterations; iteration++) {
+    onProgress({
+      phase: 'reviewing',
+      totalIssues: issues.length,
+      message: `Running combined review (iteration ${iteration})...`,
+      iteration,
+      maxIterations,
+    });
+
+    let fullReview;
+    try {
+      fullReview = await runFullReview(worktreePath, {
+        verbose,
+        issueContent: combinedIssueContent,
+        onProgress: (msg) => onProgress({
+          phase: 'reviewing',
+          totalIssues: issues.length,
+          message: msg,
+          iteration,
+          maxIterations,
+        }),
+      });
+    } catch (error) {
+      // Review failed - still return partial success
+      onProgress({
+        phase: 'complete',
+        totalIssues: issues.length,
+        message: `Batch fix complete (review failed: ${error instanceof Error ? error.message : 'unknown'})`,
+      });
+
+      return {
+        branchName,
+        worktreePath,
+        issueResults,
+        status: successCount === issues.length ? 'success' : 'partial',
+        successCount,
+        failedCount: issueResults.filter(r => r.status !== 'success').length,
+        iterations: iteration,
+        durationMs: Date.now() - startTime,
+      };
+    }
+
+    // Parse review for actionable items
+    const analysis = await parseReviewForActionables(fullReview.combined);
+
+    // Check if we're done
+    if (!hasActionableItems(analysis)) {
+      onProgress({
+        phase: 'complete',
+        totalIssues: issues.length,
+        message: `Batch fix complete after ${iteration} iteration(s). ${successCount}/${issues.length} issues fixed.`,
+      });
+
+      // Save fix state for each successful issue
+      let fixState = await getOrCreateFixState(resolvedPath);
+      for (const issue of issues) {
+        const result = issueResults.find(r => r.issueId === issue.id);
+        if (result?.status === 'success') {
+          const record: FixRecord = {
+            issueId: issue.id,
+            branchName,
+            worktreePath,
+            status: 'ready_for_review',
+            iterations: iteration,
+            startedAt: new Date(startTime).toISOString(),
+            completedAt: new Date().toISOString(),
+            issueContent: issue.content,
+            issueSummary: extractIssueSummary(issue.content),
+          };
+          fixState = upsertFixRecord(fixState, record);
+        }
+      }
+      await saveFixState(resolvedPath, fixState);
+
+      return {
+        branchName,
+        worktreePath,
+        issueResults,
+        status: successCount === issues.length ? 'success' : 'partial',
+        successCount,
+        failedCount: issueResults.filter(r => r.status !== 'success').length,
+        iterations: iteration,
+        durationMs: Date.now() - startTime,
+      };
+    }
+
+    // Need another iteration - run Claude to address feedback
+    if (iteration < maxIterations) {
+      onProgress({
+        phase: 'fixing',
+        totalIssues: issues.length,
+        message: `Addressing ${analysis.items.length} review items...`,
+        iteration,
+        maxIterations,
+      });
+
+      const iterationPrompt = buildIterationPrompt('batch', analysis.items.filter(
+        i => i.severity === 'must_fix' || i.severity === 'should_fix'
+      ));
+
+      try {
+        await runClaude({
+          prompt: iterationPrompt,
+          cwd: worktreePath,
+          verbose,
+          onProgress: (msg) => onProgress({
+            phase: 'fixing',
+            totalIssues: issues.length,
+            message: msg,
+            iteration,
+            maxIterations,
+          }),
+        });
+      } catch {
+        // Continue to next review even if this fails
+      }
+
+      lastActionableItems = analysis.items.filter(
+        i => i.severity === 'must_fix' || i.severity === 'should_fix'
+      );
+    }
+  }
+
+  // Hit iteration limit
+  onProgress({
+    phase: 'complete',
+    totalIssues: issues.length,
+    message: `Batch fix complete (hit iteration limit). ${successCount}/${issues.length} issues fixed.`,
+  });
+
+  // Save fix state
+  let fixState = await getOrCreateFixState(resolvedPath);
+  for (const issue of issues) {
+    const result = issueResults.find(r => r.issueId === issue.id);
+    if (result?.status === 'success') {
+      const record: FixRecord = {
+        issueId: issue.id,
+        branchName,
+        worktreePath,
+        status: 'ready_for_review',
+        iterations: maxIterations,
+        startedAt: new Date(startTime).toISOString(),
+        completedAt: new Date().toISOString(),
+        issueContent: issue.content,
+        issueSummary: extractIssueSummary(issue.content),
+      };
+      fixState = upsertFixRecord(fixState, record);
+    }
+  }
+  await saveFixState(resolvedPath, fixState);
+
+  return {
+    branchName,
+    worktreePath,
+    issueResults,
+    status: successCount === issues.length ? 'success' : 'partial',
+    successCount,
+    failedCount: issueResults.filter(r => r.status !== 'success').length,
+    iterations: maxIterations,
+    durationMs: Date.now() - startTime,
+  };
 }

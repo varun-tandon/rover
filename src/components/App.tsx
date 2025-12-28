@@ -1,15 +1,15 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useApp } from 'ink';
-import type { CandidateIssue, ApprovedIssue, VoterStatus, Vote } from '../types/index.js';
+import type { CandidateIssue, ApprovedIssue, CheckerStatus } from '../types/index.js';
 import { ScanProgress } from './ScanProgress.js';
-import { VotingProgress } from './VotingProgress.js';
+import { CheckingProgress } from './CheckingProgress.js';
 import { Results } from './Results.js';
-import { getAgent, getAgentIds, runScanner, runVotersInParallel, runArbitrator } from '../agents/index.js';
+import { getAgent, getAgentIds, runScanner, runChecker, runArbitrator } from '../agents/index.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { throttle } from '../utils/throttle.js';
 
-type Phase = 'init' | 'scanning' | 'voting' | 'arbitrating' | 'complete' | 'error';
+type Phase = 'init' | 'scanning' | 'checking' | 'saving' | 'complete' | 'error';
 
 interface AppProps {
   command: string;
@@ -29,8 +29,11 @@ export function App({ command, targetPath, flags }: AppProps) {
   const [error, setError] = useState<string | null>(null);
   const [scanMessage, setScanMessage] = useState('Initializing...');
   const [candidateIssues, setCandidateIssues] = useState<CandidateIssue[]>([]);
-  const [voterStatuses, setVoterStatuses] = useState<VoterStatus[]>([]);
-  const [votes, setVotes] = useState<Vote[]>([]);
+  const [checkerStatus, setCheckerStatus] = useState<CheckerStatus>({
+    status: 'pending',
+    issuesChecked: 0,
+    totalIssues: 0
+  });
   const [approvedIssues, setApprovedIssues] = useState<ApprovedIssue[]>([]);
   const [rejectedIssues, setRejectedIssues] = useState<CandidateIssue[]>([]);
   const [ticketPaths, setTicketPaths] = useState<string[]>([]);
@@ -53,39 +56,20 @@ export function App({ command, targetPath, flags }: AppProps) {
     throttle((cost: number) => setScanCost(cost), 200)
   ).current;
 
-  // Initialize voter statuses
-  const initVoterStatuses = useCallback((issueCount: number): VoterStatus[] => {
-    return [1, 2, 3].map(i => ({
-      id: `voter-${i}`,
-      status: 'pending' as const,
-      votesCompleted: 0,
-      totalVotes: issueCount
-    }));
-  }, []);
+  // Ref to track issues checked (needed for batch updates)
+  const issuesCheckedRef = useRef(0);
 
-  // Update voter progress with throttling to avoid excessive re-renders.
-  // 300ms throttle (vs 200ms for scan messages) because voter status updates are less
-  // time-critical for user feedback and happen more frequently (3 voters x N issues).
-  const throttledIncrementVoterProgress = useRef(
-    throttle((voterId: string) => {
-      setVoterStatuses(prev => prev.map(voterStatus =>
-        voterStatus.id === voterId
-          ? { ...voterStatus, status: 'voting' as const, votesCompleted: voterStatus.votesCompleted + 1 }
-          : voterStatus
-      ));
+  // Throttled checker progress update - now accepts batch count
+  const throttledUpdateCheckerProgress = useRef(
+    throttle((batchCount: number) => {
+      issuesCheckedRef.current += batchCount;
+      setCheckerStatus(prev => ({
+        ...prev,
+        status: 'checking' as const,
+        issuesChecked: issuesCheckedRef.current
+      }));
     }, 300)
   ).current;
-
-  // Callback for voter progress updates
-  const updateVoterProgress = useCallback((
-    voterId: string,
-    _issueId: string,
-    completed: boolean
-  ) => {
-    if (completed) {
-      throttledIncrementVoterProgress(voterId);
-    }
-  }, [throttledIncrementVoterProgress]);
 
   // Main scan workflow
   useEffect(() => {
@@ -142,40 +126,42 @@ export function App({ command, targetPath, flags }: AppProps) {
           return;
         }
 
-        // Phase 2: Voting
-        setPhase('voting');
-        const initialStatuses = initVoterStatuses(scanResult.issues.length);
-        setVoterStatuses(initialStatuses);
+        // Phase 2: Checking
+        setPhase('checking');
+        setCheckerStatus({
+          status: 'checking',
+          issuesChecked: 0,
+          totalIssues: scanResult.issues.length
+        });
 
-        // Start all voters with 'voting' status
-        setVoterStatuses(prev => prev.map(voterStatus => ({ ...voterStatus, status: 'voting' as const })));
+        // Reset issues checked ref before checking
+        issuesCheckedRef.current = 0;
 
-        const voterResults = await runVotersInParallel(
-          resolvedPath,
+        const checkerResult = await runChecker({
+          targetPath: resolvedPath,
           agentId,
-          scanResult.issues,
-          3,
-          updateVoterProgress
-        );
+          issues: scanResult.issues,
+          onProgress: (batchCount, completed) => {
+            if (completed) {
+              throttledUpdateCheckerProgress(batchCount);
+            }
+          }
+        });
 
-        // Mark all voters as complete and collect votes
-        setVoterStatuses(prev => prev.map(voterStatus => ({
-          ...voterStatus,
-          status: 'completed' as const,
-          votesCompleted: voterStatus.totalVotes
-        })));
+        // Mark checker as complete
+        setCheckerStatus(prev => ({
+          ...prev,
+          status: 'completed',
+          issuesChecked: prev.totalIssues
+        }));
 
-        const allVotes = voterResults.flatMap(voterResult => voterResult.votes);
-        setVotes(allVotes);
-
-        // Phase 3: Arbitration
-        setPhase('arbitrating');
+        // Phase 3: Save
+        setPhase('saving');
 
         const arbitratorResult = await runArbitrator({
           targetPath: resolvedPath,
           candidateIssues: scanResult.issues,
-          votes: allVotes,
-          minimumVotes: 2
+          approvedIds: checkerResult.approvedIds
         });
 
         setApprovedIssues(arbitratorResult.approvedIssues);
@@ -194,7 +180,7 @@ export function App({ command, targetPath, flags }: AppProps) {
     }
 
     runWorkflow();
-  }, [command, agentId, agent, resolvedPath, flags.dryRun, initVoterStatuses, updateVoterProgress, throttledSetScanMessage, throttledSetScanCost]);
+  }, [command, agentId, agent, resolvedPath, flags.dryRun, throttledSetScanMessage, throttledSetScanCost, throttledUpdateCheckerProgress]);
 
   // Auto-exit after completion
   useEffect(() => {
@@ -232,7 +218,7 @@ export function App({ command, targetPath, flags }: AppProps) {
       </Box>
 
       {/* Scanning phase */}
-      {(phase === 'scanning' || phase === 'voting' || phase === 'arbitrating' || phase === 'complete') && (
+      {(phase === 'scanning' || phase === 'checking' || phase === 'saving' || phase === 'complete') && (
         <ScanProgress
           agentName={agent?.name ?? agentId}
           targetPath={resolvedPath}
@@ -243,19 +229,19 @@ export function App({ command, targetPath, flags }: AppProps) {
         />
       )}
 
-      {/* Voting phase */}
-      {(phase === 'voting' || phase === 'arbitrating' || phase === 'complete') && candidateIssues.length > 0 && (
-        <VotingProgress
+      {/* Checking phase */}
+      {(phase === 'checking' || phase === 'saving' || phase === 'complete') && candidateIssues.length > 0 && (
+        <CheckingProgress
           issueCount={candidateIssues.length}
-          voters={voterStatuses}
-          isComplete={phase !== 'voting'}
+          checker={checkerStatus}
+          isComplete={phase !== 'checking'}
         />
       )}
 
-      {/* Arbitration indicator */}
-      {phase === 'arbitrating' && (
+      {/* Saving indicator */}
+      {phase === 'saving' && (
         <Box marginY={1}>
-          <Text color="cyan">Arbitrating votes and creating tickets...</Text>
+          <Text color="cyan">Saving approved issues...</Text>
         </Box>
       )}
 
