@@ -2,7 +2,7 @@
 
 AI-powered codebase scanner with multi-agent validation.
 
-Rover scans your codebase using 33 specialized AI agents to detect code quality issues, security vulnerabilities, architectural problems, and anti-patterns. Issues are validated through a 3-phase consensus pipeline before being saved as tickets.
+Rover scans your codebase using 43 specialized AI agents to detect code quality issues, security vulnerabilities, architectural problems, and anti-patterns. Issues are validated through a 3-phase consensus pipeline before being saved as tickets.
 
 ## TL;DR
 
@@ -78,7 +78,7 @@ rover scan <path> [options]
 ```
 
 **Options:**
-- `--all` - Run all 33 agents (recommended for thorough analysis)
+- `--all` - Run all 43 agents (recommended for thorough analysis)
 - `-a, --agent <id>` - Run a specific agent by ID (default: security-auditor)
 - `--concurrency <n>` - Agents to run in parallel with --all (default: 8)
 - `--dry-run` - Preview what would be scanned without running
@@ -87,7 +87,7 @@ rover scan <path> [options]
 **Examples:**
 ```bash
 rover scan ./my-project                 # Scan with default agent
-rover scan ./my-project --all           # Full scan with all 33 agents
+rover scan ./my-project --all           # Full scan with all 43 agents
 rover scan . -a dead-code-detector      # Run specific agent
 rover scan ./app --all --concurrency=2  # Use fewer parallel agents
 ```
@@ -250,23 +250,24 @@ rover remember "Duplicate code in adapters/ is intentional for isolation"
 
 ## Available Agents
 
-Rover includes 33 specialized scanning agents organized by category:
+Rover includes 43 specialized scanning agents organized by category:
 
 | Category | Agents |
 |----------|--------|
 | Architecture (5) | depth-gauge, generalizer, cohesion-analyzer, layer-petrifier, boilerplate-buster |
-| Code Clarity (4) | obviousness-auditor, why-asker, naming-renovator, interface-documenter |
+| Code Clarity (4) | obviousness-auditor, why-asker, naming-renovator, comment-noise-detector |
 | Consistency (1) | consistency-cop |
-| Bug Detection (2) | exception-auditor, logic-detective |
+| Bug Detection (3) | exception-auditor, logic-detective, concurrency-auditor |
+| Accessibility (1) | accessibility-auditor |
+| State Architecture (1) | state-architecture-auditor |
 | Config (1) | config-cleaner |
 | Performance (2) | query-optimizer, async-efficiency-auditor |
 | Dependencies (1) | dependency-auditor |
-| Code Health (3) | dead-code-detector, complexity-analyzer, duplication-finder |
+| Code Health (4) | dead-code-detector, complexity-analyzer, duplication-finder, stale-artifact-detector |
 | API (1) | api-contract-validator |
-| Security (1) | security-auditor |
-| TypeScript (1) | typescript-quality-auditor |
-| React (1) | react-patterns-auditor |
-| Next.js (10) | client-boundary-optimizer, server-action-auditor, data-fetching-strategist, route-segment-analyzer, nextjs-asset-optimizer, nextjs-rendering-optimizer, hydration-mismatch-detector, navigation-pattern-enforcer, metadata-checker, bundle-performance-auditor |
+| Next.js (9) | client-boundary-optimizer, server-action-auditor, data-fetching-strategist, route-segment-analyzer, nextjs-asset-optimizer, hydration-mismatch-detector, navigation-pattern-enforcer, metadata-checker, design-system-enforcer |
+| Consolidated (5) | react-patterns-auditor, nextjs-rendering-optimizer, bundle-performance-auditor, security-auditor, typescript-quality-auditor |
+| Consistency & Migration (5) | api-route-consistency-auditor, partial-migration-detector, state-duplication-auditor, data-fetching-consistency-auditor, async-fire-and-forget-detector |
 
 Run `rover agents` to see full descriptions of each agent.
 
