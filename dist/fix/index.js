@@ -1,0 +1,495 @@
+/**
+ * Main orchestration for the fix workflow
+ */
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { createWorktree, generateUniqueBranchName, removeWorktree } from './worktree.js';
+import { runClaude, buildInitialFixPrompt, buildIterationPrompt, isAlreadyFixed, isReviewNotApplicable, extractDismissalJustification } from './claude-runner.js';
+import { runFullReview, parseReviewForActionables, hasActionableItems, verifyReviewDismissal } from './reviewer.js';
+import { getTicketPathById } from '../storage/tickets.js';
+import { removeIssues } from '../storage/issues.js';
+import { getOrCreateFixState, saveFixState, saveFixTrace, upsertFixRecord, } from '../storage/fix-state.js';
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
+/**
+ * Sleep for a given number of milliseconds
+ */
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+/**
+ * Extract a brief summary from issue content
+ * Looks for the first meaningful line (title, heading, or first sentence)
+ */
+function extractIssueSummary(content) {
+    const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    for (const line of lines) {
+        // Skip markdown metadata, headers with just symbols
+        if (line.startsWith('---') || line.match(/^#+\s*$/)) {
+            continue;
+        }
+        // Clean up markdown headers
+        const cleaned = line.replace(/^#+\s*/, '').trim();
+        if (cleaned.length > 0) {
+            // Truncate if too long (for PR title)
+            if (cleaned.length > 100) {
+                return cleaned.slice(0, 97) + '...';
+            }
+            return cleaned;
+        }
+    }
+    return 'Fix issue';
+}
+/**
+ * Load issue context from a ticket file
+ */
+async function loadIssueContext(targetPath, issueId) {
+    const ticketPath = getTicketPathById(targetPath, issueId);
+    if (!ticketPath) {
+        throw new Error(`Issue ${issueId} not found`);
+    }
+    const content = await readFile(ticketPath, 'utf-8');
+    return {
+        id: issueId,
+        content,
+        ticketPath,
+    };
+}
+/**
+ * Fix a single issue through the full workflow
+ */
+async function fixSingleIssue(issue, originalPath, maxIterations, verbose, onProgress) {
+    const startTime = Date.now();
+    const resolvedOriginal = resolve(originalPath);
+    // Initialize trace early so we can capture all outcomes
+    const trace = {
+        issueId: issue.id,
+        startedAt: new Date(startTime).toISOString(),
+        iterations: [],
+        finalStatus: 'error', // Will be updated on success
+    };
+    // Helper to save trace and return result
+    async function saveTraceAndReturn(result) {
+        trace.completedAt = new Date().toISOString();
+        trace.finalStatus = result.status;
+        trace.error = result.error;
+        try {
+            await saveFixTrace(resolvedOriginal, trace);
+        }
+        catch (err) {
+            console.warn(`Warning: Could not save trace for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return result;
+    }
+    // Generate branch name
+    const baseBranchName = `fix/${issue.id}`;
+    let branchName;
+    try {
+        branchName = await generateUniqueBranchName(resolvedOriginal, baseBranchName);
+    }
+    catch (error) {
+        return saveTraceAndReturn({
+            issueId: issue.id,
+            status: 'error',
+            worktreePath: '',
+            branchName: baseBranchName,
+            iterations: 0,
+            error: `Failed to generate branch name: ${error instanceof Error ? error.message : String(error)}`,
+            durationMs: Date.now() - startTime,
+        });
+    }
+    // Step 1: Create worktree
+    onProgress({
+        issueId: issue.id,
+        phase: 'worktree',
+        iteration: 0,
+        maxIterations,
+        message: `Creating worktree with branch ${branchName}...`,
+    });
+    let worktreePath;
+    try {
+        worktreePath = await createWorktree(resolvedOriginal, branchName);
+    }
+    catch (error) {
+        return saveTraceAndReturn({
+            issueId: issue.id,
+            status: 'error',
+            worktreePath: '',
+            branchName,
+            iterations: 0,
+            error: `Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+            durationMs: Date.now() - startTime,
+        });
+    }
+    // Step 2-7: Fix and review loop
+    let sessionId;
+    let lastActionableItems = [];
+    for (let iteration = 1; iteration <= maxIterations; iteration++) {
+        // Initialize iteration trace
+        const iterationTrace = {
+            iteration,
+            startedAt: new Date().toISOString(),
+            completedAt: '', // Will be set when iteration completes
+            claudeOutput: '',
+            claudeExitCode: 0,
+            alreadyFixed: false,
+            reviewNotApplicable: false,
+        };
+        // Step 2: Run Claude to fix
+        onProgress({
+            issueId: issue.id,
+            phase: 'fixing',
+            iteration,
+            maxIterations,
+            message: iteration === 1
+                ? 'Claude is analyzing and fixing the issue...'
+                : `Claude is addressing review feedback (iteration ${iteration})...`,
+        });
+        const prompt = iteration === 1
+            ? buildInitialFixPrompt(issue.id, issue.content)
+            : buildIterationPrompt(issue.id, lastActionableItems);
+        let claudeResult;
+        let retryCount = 0;
+        while (retryCount <= MAX_RETRIES) {
+            try {
+                claudeResult = await runClaude({
+                    prompt,
+                    cwd: worktreePath,
+                    sessionId,
+                    verbose,
+                    onProgress: (msg) => {
+                        onProgress({
+                            issueId: issue.id,
+                            phase: 'fixing',
+                            iteration,
+                            maxIterations,
+                            message: msg,
+                        });
+                    },
+                });
+                break;
+            }
+            catch (error) {
+                retryCount++;
+                if (retryCount > MAX_RETRIES) {
+                    return {
+                        issueId: issue.id,
+                        status: 'error',
+                        worktreePath,
+                        branchName,
+                        iterations: iteration - 1,
+                        error: `Claude CLI failed: ${error instanceof Error ? error.message : String(error)}`,
+                        durationMs: Date.now() - startTime,
+                    };
+                }
+                await sleep(RETRY_DELAY_MS * retryCount);
+            }
+        }
+        if (!claudeResult) {
+            iterationTrace.completedAt = new Date().toISOString();
+            trace.iterations.push(iterationTrace);
+            return saveTraceAndReturn({
+                issueId: issue.id,
+                status: 'error',
+                worktreePath,
+                branchName,
+                iterations: iteration - 1,
+                error: 'Claude CLI returned no result',
+                durationMs: Date.now() - startTime,
+            });
+        }
+        // Capture Claude result in trace
+        iterationTrace.claudeSessionId = claudeResult.sessionId || undefined;
+        iterationTrace.claudeOutput = claudeResult.output;
+        iterationTrace.claudeExitCode = claudeResult.exitCode;
+        // Save session ID for potential resume
+        if (claudeResult.sessionId) {
+            sessionId = claudeResult.sessionId;
+        }
+        // Check if Claude exited with an error
+        if (claudeResult.exitCode !== 0) {
+            iterationTrace.completedAt = new Date().toISOString();
+            trace.iterations.push(iterationTrace);
+            return saveTraceAndReturn({
+                issueId: issue.id,
+                status: 'error',
+                worktreePath,
+                branchName,
+                iterations: iteration,
+                error: `Claude CLI exited with code ${claudeResult.exitCode}`,
+                durationMs: Date.now() - startTime,
+            });
+        }
+        // Check if Claude determined the issue is already fixed (first iteration only)
+        if (iteration === 1 && isAlreadyFixed(claudeResult.output)) {
+            iterationTrace.alreadyFixed = true;
+            iterationTrace.completedAt = new Date().toISOString();
+            trace.iterations.push(iterationTrace);
+            onProgress({
+                issueId: issue.id,
+                phase: 'already_fixed',
+                iteration,
+                maxIterations,
+                message: 'Issue already fixed - removing from issues list',
+            });
+            // Remove the worktree since no changes were made
+            try {
+                await removeWorktree(originalPath, worktreePath);
+            }
+            catch {
+                // Worktree removal failed, but that's okay
+            }
+            // Remove the issue from the store
+            try {
+                await removeIssues(originalPath, [issue.id]);
+            }
+            catch (err) {
+                // Log but don't fail - the issue being already fixed is the important outcome
+                console.warn(`Warning: Could not remove issue ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            return saveTraceAndReturn({
+                issueId: issue.id,
+                status: 'already_fixed',
+                worktreePath: '',
+                branchName,
+                iterations: iteration,
+                durationMs: Date.now() - startTime,
+            });
+        }
+        // Check if Claude determined the review feedback was not applicable (iterations > 1)
+        if (iteration > 1 && isReviewNotApplicable(claudeResult.output)) {
+            // Get must_fix items from previous iteration's review
+            const previousReview = trace.iterations[iteration - 2]?.review;
+            const mustFixItems = (previousReview?.parsedItems ?? []).filter((item) => item.severity === 'must_fix');
+            // If there were must_fix items, verify the dismissal
+            if (mustFixItems.length > 0) {
+                onProgress({
+                    issueId: issue.id,
+                    phase: 'reviewing',
+                    iteration,
+                    maxIterations,
+                    message: 'Verifying review dismissal...',
+                });
+                const justification = extractDismissalJustification(claudeResult.output);
+                const verification = await verifyReviewDismissal(mustFixItems, justification, worktreePath);
+                if (!verification.allVerified) {
+                    // Some dismissals were invalid - continue with remaining items
+                    onProgress({
+                        issueId: issue.id,
+                        phase: 'fixing',
+                        iteration,
+                        maxIterations,
+                        message: `${verification.remainingItems.length} review items still need attention`,
+                    });
+                    // Set remaining items for the next iteration
+                    lastActionableItems = verification.remainingItems.map((i) => ({
+                        severity: i.severity,
+                        description: i.description,
+                        file: i.file,
+                    }));
+                    iterationTrace.completedAt = new Date().toISOString();
+                    trace.iterations.push(iterationTrace);
+                    continue;
+                }
+            }
+            // All dismissals verified (or no must_fix items) - accept and complete
+            iterationTrace.reviewNotApplicable = true;
+            iterationTrace.completedAt = new Date().toISOString();
+            trace.iterations.push(iterationTrace);
+            onProgress({
+                issueId: issue.id,
+                phase: 'complete',
+                iteration,
+                maxIterations,
+                message: `Complete - review feedback verified as not applicable (${iteration} iteration${iteration !== 1 ? 's' : ''})`,
+            });
+            return saveTraceAndReturn({
+                issueId: issue.id,
+                status: 'success',
+                worktreePath,
+                branchName,
+                iterations: iteration,
+                durationMs: Date.now() - startTime,
+            });
+        }
+        // Step 3: Run review
+        onProgress({
+            issueId: issue.id,
+            phase: 'reviewing',
+            iteration,
+            maxIterations,
+            message: 'Running code review...',
+        });
+        let fullReview;
+        try {
+            fullReview = await runFullReview(worktreePath, {
+                verbose,
+                issueContent: issue.content,
+                onProgress: (msg) => {
+                    onProgress({
+                        issueId: issue.id,
+                        phase: 'reviewing',
+                        iteration,
+                        maxIterations,
+                        message: msg,
+                    });
+                },
+            });
+        }
+        catch (error) {
+            // Review failed - treat as needing manual review
+            iterationTrace.completedAt = new Date().toISOString();
+            trace.iterations.push(iterationTrace);
+            return saveTraceAndReturn({
+                issueId: issue.id,
+                status: 'error',
+                worktreePath,
+                branchName,
+                iterations: iteration,
+                error: `Review failed: ${error instanceof Error ? error.message : String(error)}`,
+                durationMs: Date.now() - startTime,
+            });
+        }
+        // Step 4: Parse review for actionable items (parses combined architecture + bug reviews)
+        const analysis = await parseReviewForActionables(fullReview.combined);
+        // Capture review data in trace
+        iterationTrace.review = {
+            architectureOutput: fullReview.architectureReview,
+            bugOutput: fullReview.bugReview,
+            combinedOutput: fullReview.combined,
+            parsedItems: analysis.items,
+            actionableCount: analysis.items.filter((i) => i.severity === 'must_fix' || i.severity === 'should_fix').length,
+        };
+        // Step 5: Check if we're done
+        if (!hasActionableItems(analysis)) {
+            iterationTrace.completedAt = new Date().toISOString();
+            trace.iterations.push(iterationTrace);
+            onProgress({
+                issueId: issue.id,
+                phase: 'complete',
+                iteration,
+                maxIterations,
+                message: `Complete after ${iteration} iteration(s)`,
+            });
+            return saveTraceAndReturn({
+                issueId: issue.id,
+                status: 'success',
+                worktreePath,
+                branchName,
+                iterations: iteration,
+                durationMs: Date.now() - startTime,
+            });
+        }
+        // Step 6: More iterations needed - finalize this iteration trace
+        iterationTrace.completedAt = new Date().toISOString();
+        trace.iterations.push(iterationTrace);
+        const mustFixCount = analysis.items.filter((i) => i.severity === 'must_fix').length;
+        const shouldFixCount = analysis.items.filter((i) => i.severity === 'should_fix').length;
+        onProgress({
+            issueId: issue.id,
+            phase: 'iterating',
+            iteration,
+            maxIterations,
+            message: `Review found ${mustFixCount} must-fix, ${shouldFixCount} should-fix items`,
+            actionableItems: mustFixCount + shouldFixCount,
+        });
+        // Save items for next iteration prompt
+        lastActionableItems = analysis.items.filter((i) => i.severity === 'must_fix' || i.severity === 'should_fix');
+    }
+    // Hit iteration limit
+    onProgress({
+        issueId: issue.id,
+        phase: 'complete',
+        iteration: maxIterations,
+        maxIterations,
+        message: `Hit iteration limit (${maxIterations}). Manual review recommended.`,
+        actionableItems: lastActionableItems.length,
+    });
+    return saveTraceAndReturn({
+        issueId: issue.id,
+        status: 'iteration_limit',
+        worktreePath,
+        branchName,
+        iterations: maxIterations,
+        durationMs: Date.now() - startTime,
+    });
+}
+/**
+ * Run the fix workflow for multiple issues in parallel
+ */
+export async function runFix(options, onProgress) {
+    const { targetPath, issueIds, concurrency, maxIterations, verbose } = options;
+    const resolvedPath = resolve(targetPath);
+    // Load all issues first to validate they exist
+    const issues = [];
+    const errorResults = [];
+    for (const issueId of issueIds) {
+        try {
+            const issue = await loadIssueContext(resolvedPath, issueId);
+            issues.push(issue);
+        }
+        catch (error) {
+            // Report error for this issue and add to results
+            onProgress({
+                issueId,
+                phase: 'error',
+                iteration: 0,
+                maxIterations,
+                message: `Issue not found: ${issueId}`,
+            });
+            errorResults.push({
+                issueId,
+                status: 'error',
+                worktreePath: '',
+                branchName: '',
+                iterations: 0,
+                error: `Issue not found: ${issueId}`,
+                durationMs: 0,
+            });
+        }
+    }
+    if (issues.length === 0) {
+        return errorResults;
+    }
+    // Load or create fix state
+    let fixState = await getOrCreateFixState(resolvedPath);
+    // Work queue pattern
+    const queue = [...issues];
+    const results = [];
+    async function worker() {
+        while (queue.length > 0) {
+            const issue = queue.shift();
+            if (!issue)
+                break;
+            const result = await fixSingleIssue(issue, resolvedPath, maxIterations, verbose, onProgress);
+            results.push(result);
+            // Save fix record to state (skip already_fixed since worktree is removed)
+            if (result.status !== 'already_fixed' && result.worktreePath) {
+                // Extract summary from issue content (first non-empty line or first sentence)
+                const issueSummary = extractIssueSummary(issue.content);
+                const record = {
+                    issueId: result.issueId,
+                    branchName: result.branchName,
+                    worktreePath: result.worktreePath,
+                    status: result.status === 'success' || result.status === 'iteration_limit'
+                        ? 'ready_for_review'
+                        : 'error',
+                    iterations: result.iterations,
+                    startedAt: new Date(Date.now() - result.durationMs).toISOString(),
+                    completedAt: new Date().toISOString(),
+                    error: result.error,
+                    issueContent: issue.content,
+                    issueSummary,
+                };
+                fixState = upsertFixRecord(fixState, record);
+                await saveFixState(resolvedPath, fixState);
+            }
+        }
+    }
+    // Spawn workers up to concurrency limit
+    const workerCount = Math.min(concurrency, issues.length);
+    const workers = Array.from({ length: workerCount }, () => worker());
+    await Promise.all(workers);
+    // Combine error results (for issues that weren't found) with fix results
+    return [...errorResults, ...results];
+}

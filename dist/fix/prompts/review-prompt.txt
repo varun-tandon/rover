@@ -1,0 +1,318 @@
+Code Review Guidelines: The Ousterhout Principles for Minimizing Complexity
+
+Introduction: The Prime Directive and the Nature of Complexity 1.1. Purpose of Review: The fundamental objective of code review within this organization is not merely to find bugs or enforce stylistic conformity. It is the primary defense mechanism against the single greatest challenge in software development: Complexity. Our reviews must relentlessly strive to identify and eliminate unnecessary complexity to ensure the long-term viability, maintainability, and understandability of our systems.
+
+1.2. Understanding Complexity (Chapter 2):
+
+Definition: Complexity is anything related to the structure of the software that makes it difficult to understand or modify. It's not about the sophistication of the features, but the effort required for a developer to work within the system. Simple systems allow large improvements with less effort; complex systems require significant effort for even small changes.
+
+Manifestations: Reviewers must be acutely sensitive to the three key symptoms of complexity:
+
+Change Amplification: Does a seemingly simple conceptual change (e.g., changing a configuration parameter's meaning, altering a data format) require modifications scattered across numerous modules or files? This indicates high coupling and poor abstraction. Reviewer Action: Question designs where dependencies seem widespread for localized concepts. Look for opportunities to centralize related logic.
+
+Cognitive Load: How much context, background information, specific APIs, or implementation details must a developer load into their working memory to understand this piece of code or make a safe change? High cognitive load stems from complex interfaces, numerous dependencies, inconsistencies, global state, and unclear abstractions. Reviewer Action: If you find the code hard to grasp quickly, it likely has high cognitive load. Probe why. Is the abstraction weak? Are there too many interdependencies? Is the naming unclear?
+
+Unknown Unknowns: This is the most dangerous symptom. Does the code make it unclear what needs to be modified for a change, or what information a developer needs to even know? Are there hidden dependencies, subtle side effects, or undocumented requirements? This often arises from information leakage or poor abstractions. Reviewer Action: Prioritize clarity and obviousness. If the impact or requirements of a change aren't immediately clear from the code and its local comments/interfaces, flag it as a major issue. The goal is code that is obvious (Chapter 18).
+
+Sources: Complexity arises primarily from two sources:
+
+Dependencies: Connections between pieces of code. While necessary, excessive or poorly managed dependencies (especially hidden ones) are a major driver of complexity.
+
+Obscurity: Important information is not easily discoverable (e.g., vague names, undocumented behavior, complex logic, inconsistencies).
+
+Incremental Nature: Complexity rarely arises from a single catastrophic decision. It accumulates through hundreds or thousands of small, seemingly insignificant compromises made over time. Reviewer Action: Sweat the small stuff. Every small piece of added complexity, every minor obscurity, every slightly-too-shallow module matters. Resist the "it's just a small compromise for now" mentality. This is the core of the strategic mindset.
+
+1.3. Reviewer's Role: You are not just a bug checker. You are a complexity manager, a guardian of the system's design integrity. Your primary responsibility is to ensure that code merged into the system actively reduces or minimizes complexity according to the principles outlined below.
+
+The Reviewer's Mindset: Strategic Investment (Chapter 3) 2.1. Strategic vs. Tactical Programming:
+
+Reject Tactical Reviews: Do not approve code solely because it delivers a feature quickly or fixes a bug with the absolute minimum lines changed. This "tactical" approach inevitably leads to design decay and complexity accumulation. Beware the "tactical tornado" developer who churns out code quickly but leaves a wake of complexity for others.
+
+Embrace Strategic Reviews: Focus on the long-term structure. The goal is not just "working code," but "working code with a great design." Ask: "If we were designing this system today, knowing about this new requirement/feature, is this the structure we would choose?" If not, encourage refactoring now.
+
+2.2. The Investment Mindset:
+
+Review as Investment: Code review, especially when it involves requesting refactoring for design improvement, is part of the essential investment (Ousterhout suggests 10-20% of development time) needed to maintain design quality. This investment pays for itself quickly by preventing slowdowns caused by complexity (Figure 3.1).
+
+Continuous Improvement: Every review is an opportunity to pay down technical debt and improve the design. Encourage authors to leave the code slightly better than they found it, even if the original task was just a small fix. Resisting small improvements leads to gradual degradation.
+
+Fight Procrastination: Do not accept "we'll clean it up later" as an excuse. "Later" rarely comes. Design issues identified during review should ideally be addressed before merging, unless there are compelling, explicitly discussed reasons (like extreme deadlines, where the trade-off is acknowledged and a follow-up is scheduled).
+
+Key Areas of Focus During Review (The Principles Applied) 3.1. Modules Should Be Deep (Chapter 4):
+
+Assess Interface vs. Implementation: The core principle. Is the interface presented by a class or module significantly simpler than its implementation? A deep module provides powerful functionality (large area in Fig 4.1) through a simple interface (short top edge in Fig 4.1). It hides complexity effectively.
+
+Questions to Ask:
+
+Can I understand how to use this module effectively just by reading its interface comments, without needing to understand its internal workings?
+
+Does the interface expose implementation details unnecessarily?
+
+Is the benefit provided by the module (functionality, complexity hiding) significantly greater than the cost of its interface (learning, usage complexity)?
+
+Red Flag: Shallow Module (Section 4.5, Red Flag p. 37): Be critical of modules where the interface complexity approaches the implementation complexity. Examples:
+
+Classes that are simple wrappers around data structures with basic getters/setters (see Section 19.6).
+
+Trivial methods that offer little abstraction over their implementation (e.g., addNullValueForAttribute example).
+
+Linked list classes (the abstraction benefit is small compared to the interface cost).
+
+Action: Question the existence of shallow modules. Could their functionality be merged into a deeper, existing module? Could the module be eliminated entirely if it provides little abstraction? Resist the "Classitis" urge to break things down into trivially small, shallow classes (Section 4.6). Reference the Java I/O example (Section 4.7) as a cautionary tale of excessive shallow classes.
+
+3.2. Maximize Information Hiding (Chapter 5):
+
+Identify Hidden Knowledge: What key design decisions or information (e.g., data formats, algorithms, resource management policies, underlying representations) are encapsulated within the module and not exposed through its interface? Good modules hide significant information.
+
+Red Flag: Information Leakage (Section 5.2, Red Flag p. 42): This is a critical red flag. Look for instances where the same piece of knowledge or design decision is reflected in multiple modules. Examples:
+
+Two classes both understanding the specific format of a file or network message.
+
+Multiple modules depending on the internal representation of data in another module (even if accessed via getters/setters).
+
+Shared assumptions about system state or configuration.
+
+Action: When leakage is detected, strongly advocate for refactoring. Options include: merging the affected modules if they are small and closely related, or extracting the shared knowledge into a new, dedicated module with a clean interface that hides the details.
+
+Red Flag: Temporal Decomposition (Section 5.3, Red Flag p. 43): Review the module structure. Is it organized based on when things happen (e.g., read phase, process phase, write phase) rather than what knowledge needs to be encapsulated? Temporal decomposition frequently leads to information leakage because the same knowledge (e.g., data format) is often needed at multiple points in time. Action: Recommend restructuring around knowledge encapsulation, not execution order. Combine components that share the same core knowledge (like the HTTP request reading/parsing example, Section 5.5).
+
+Interface Design for Hiding:
+
+Does the interface avoid exposing internal data structures? (e.g., prefer getParameter(name) over getParams() returning an internal map, Section 5.6).
+
+Does the interface provide sensible defaults, hiding complexity for the common case? (e.g., automatic buffering in I/O, default HTTP response fields, Section 5.7).
+
+Red Flag: Overexposure (Red Flag p. 47): Does using a common API force callers to learn about or deal with options/features only needed in rare cases? This increases cognitive load unnecessarily. Action: Suggest restructuring the API (e.g., separate methods, different constructors) to shield common use cases from rare complexities.
+
+Information Hiding Within Classes: Apply the principle internally too. Do private methods encapsulate specific capabilities? Is the usage scope of instance variables minimized? (Section 5.8).
+
+3.3. Prefer General-Purpose Modules (Chapter 6):
+
+Assess Generality vs. Specificity: Is the module's interface designed only for its immediate, specific purpose, or is it somewhat more general, capable of supporting potential future uses without modification?
+
+Benefits of Generality: General-purpose interfaces tend to be simpler (fewer methods), deeper, and promote better information hiding by decoupling the module from specific use cases. (Refer to the text editor example: insert(pos, text)/delete(start, end) vs. backspace(cursor)/delete(cursor)/deleteSelection(sel), Sections 6.2-6.4).
+
+Questions to Ask:
+
+Is this interface cluttered with methods tailored to specific, high-level operations?
+
+Could several special-purpose methods be replaced by a single, more fundamental general-purpose method? (Section 6.5).
+
+Is this API easy to use for the current needs, or does its generality make simple tasks overly complex? (Avoid over-generalization, Section 6.5).
+
+Red Flag: Special-General Mixture (Red Flag p. 75): Does a module providing a general mechanism (e.g., text storage) also contain code specialized for a particular use case (e.g., handling UI events like backspace)? This creates information leakage and couples the general mechanism to the specific use. Action: Push the special-purpose code upwards into the module responsible for that specific use case (Section 9.4).
+
+3.4. Ensure Different Layers, Different Abstractions (Chapter 7):
+
+Abstraction Change: As control flows from one layer (or class/method) to another, does the abstraction level change meaningfully? Adjacent layers should offer distinct views. File system layers (file -> block cache -> device driver) and network layers (stream -> packet) are good examples.
+
+Red Flag: Pass-Through Methods (Section 7.1, Red Flag p. 57): Identify methods whose primary function is to invoke another method with a nearly identical signature, adding little or no new functionality. This signals that the layers/classes involved do not have a clean separation of responsibilities or distinct abstractions.
+
+Action: Investigate the responsibilities of the classes involved. Consider refactoring:
+
+Expose the lower-level module directly, eliminating the pass-through layer (Fig 7.1b).
+
+Redistribute functionality so the call is no longer needed (Fig 7.1c).
+
+Merge the classes if their responsibilities significantly overlap (Fig 7.1d).
+
+Scrutinize Decorators (Section 7.3): Decorators often involve pass-through methods and can lead to shallow class explosions (like Java I/O). Before approving a decorator, ask:
+
+Could this functionality be added directly to the base class?
+
+Could it be merged into the specific use case code instead of being a separate class?
+
+Could it be merged with an existing decorator to create a single, deeper decorator?
+
+Could it be implemented as a standalone utility, independent of the base class?
+
+Interface vs. Implementation Abstraction (Section 7.4): The interface abstraction should be simpler and different from the implementation details. If a class's interface mirrors its internal line-based storage (e.g., getLine/putLine), it's shallow. A character-oriented or range-oriented interface provides a different, more useful abstraction.
+
+Red Flag: Pass-Through Variables (Section 7.5): Variables passed down multiple layers without being used by intermediate layers add cognitive load and make signatures complex. Action: Explore alternatives: storing the value in an existing shared object, using a global variable (use with extreme caution due to testability/concurrency issues), or preferably, introducing a Context object to encapsulate shared/global state and passing that around (ideally implicitly via constructors/member variables rather than method parameters).
+
+3.5. Pull Complexity Downwards (Chapter 8):
+
+Complexity Ownership: Does the module handle complexities inherent to its functionality, or does it export them to its users? Examples of pushing complexity upwards: throwing numerous exceptions for callers to handle, exporting many configuration parameters, requiring complex input formats.
+
+Simple Interface > Simple Implementation: Prioritize making the module easy to use, even if it requires more complex implementation logic within the module. The complexity is then handled once by the module's author, rather than many times by its users. (Refer to the text editor example: character-oriented interface is simpler for the caller, even if line splitting/joining makes the text class implementation harder, Section 8.1).
+
+Minimize Configuration Parameters (Section 8.2): Question every configuration parameter. Could the module determine a reasonable value automatically (perhaps dynamically)? Can it provide a safe, effective default? Parameters represent incomplete solutions and push complexity onto users/administrators. Only export them if users genuinely have information the module cannot deduce and the tuning provides significant benefit.
+
+Discretion: Don't overdo it. Pulling complexity down makes sense only if it simplifies the module's interface and the complexity is related to the module's core responsibility. Don't pull unrelated complexity into a module (Section 8.3).
+
+3.6. Decide: Better Together Or Better Apart? (Chapter 9):
+
+Evaluate Cohesion: When deciding whether to split or join methods/classes, consider their relationships:
+
+Shared Information: Do they rely on common knowledge or data structures? (Combine - Section 9.1, HTTP example).
+
+Simplify Interface: Does combining them allow for a simpler, more abstract interface? (Combine - Section 9.2, Java I/O buffering example).
+
+Eliminate Duplication: Does combining eliminate repeated code? (Combine - Section 9.3, goto cleanup example Fig 9.1/9.2).
+
+Separate Concerns: Does one part represent a general-purpose mechanism and the other a specific application of it? (Separate - Section 9.4, text editor vs. UI logic).
+
+Conceptual Overlap: Do they belong to the same high-level conceptual category? (Maybe combine).
+
+Interdependence: Is it hard to understand one without understanding the other? (Combine, or improve abstraction if separating).
+
+Method Splitting/Joining (Section 9.8):
+
+Don't split methods based only on length. Deep methods are good if they have a simple interface and perform a single, complete task.
+
+Split a method by factoring out a cleanly separable, general-purpose subtask into a helper method (Fig 9.3b).
+
+Split a method into two independent, simpler top-level methods only if the original method had a complex interface trying to do too many unrelated things (Fig 9.3c). Avoid splits that result in shallow methods callers must sequence (Fig 9.3d).
+
+Join methods if it creates a deeper abstraction, eliminates duplication, improves encapsulation, or simplifies the interface.
+
+Red Flag: Conjoined Methods (Red Flag p. 82): If you cannot understand or modify one method without simultaneously understanding the implementation details of another (even if they are in different classes), they are conjoined. This indicates poor separation. Action: Improve the abstraction between them or consider merging them.
+
+3.7. Define Errors (and Special Cases) Out Of Existence (Chapter 10):
+
+Exception Scrutiny: Exception handling code is complex, hard to test, and a major source of bugs (Section 10.1). Question the necessity of every exception. Too many exceptions make interfaces complex and shallow (Section 10.2).
+
+Technique 1: Define Errors Out (Section 10.3): This is the best approach. Can the API semantics be adjusted so the "exceptional" situation becomes a normal, well-defined behavior?
+
+Example: Tcl unset should just ensure the variable doesn't exist, not throw an error if it's already gone (Section 10.2).
+
+Example: Unix delete marks an open file for deletion but returns success, avoiding errors for the deleter and the processes using the file (Section 10.4).
+
+Example: Java substring should handle out-of-range indices gracefully (e.g., return empty string or clamp indices) instead of throwing IndexOutOfBoundsException (Section 10.5).
+
+Technique 2: Mask Exceptions (Section 10.6): Handle the exception completely within a low-level module so that higher levels are unaware of it. This pulls complexity downwards. Example: TCP retransmissions mask packet loss. Example: NFS client masks temporary server unavailability by hanging and retrying (though controversial, Ousterhout argues it's simpler for applications than handling explicit errors).
+
+Technique 3: Aggregate Exceptions (Section 10.7): Instead of many specific exception handlers, let exceptions propagate upwards and handle multiple types of exceptions with a single handler at a higher level. Example: Web server handling all parameter errors (missing, wrong type) in a top-level request dispatcher (Fig 10.1 vs 10.2). Example: RAMCloud promoting diverse storage errors into a single server crash recovery mechanism.
+
+Technique 4: Just Crash? (Section 10.8): For rare, fatal errors where recovery is complex, unreliable, or offers little value (e.g., out-of-memory, disk hardware failure in non-redundant systems, internal state corruption), crashing cleanly might be simpler and safer than attempting complex recovery. Don't return error codes (like C's malloc returning NULL) that require numerous checks by callers.
+
+Define Special Cases Out (Section 10.9): Apply the same "define out of existence" logic to non-error special cases. Can the normal logic/representation handle the special case without explicit if checks? Example: Representing "no selection" in a text editor as an empty selection (start index == end index) eliminates numerous checks for the "no selection" state.
+
+3.8. Choose Precise, Consistent Names (Chapter 14):
+
+Create an Image: Good names act as abstractions, conveying precise meaning and creating a mental image for the reader (Section 14.2).
+
+Precision: Names must be precise, not vague or generic. block vs. fileBlock/diskBlock (Section 14.1). count vs. numActiveIndexlets (Section 14.3). x vs. charIndex. blinkStatus vs. cursorVisible. result vs. mergedLine.
+
+Red Flag: Vague Name (Red Flag p. 132): If a name is broad enough to apply to many different things, it conveys little information and invites misuse.
+
+Consistency: Use the same name for the same concept everywhere. Never use that name for a different concept. Ensure the concept itself is narrowly defined (Section 14.4). Use distinguishing prefixes for related items (e.g., srcFileBlock, dstFileBlock).
+
+Red Flag: Hard to Pick Name (Red Flag p. 133): Difficulty finding a good name often signals a poorly defined concept or variable trying to do too much. Revisit the design.
+
+3.9. Code Should Be Obvious (Chapter 18):
+
+Goal: A reader should quickly grasp the code's meaning and behavior without deep study. First guesses should be correct.
+
+Achieve Obviousness Via: Good names (Chapter 14), consistency (Chapter 17), judicious whitespace (Section 18.1), simple control flow, clear abstractions.
+
+Red Flag: Nonobvious Code (Red Flag p. 156): If you, as a reviewer, have to struggle to understand code, it's nonobvious.
+
+Beware Obscurity Traps (Section 18.2):
+
+Event-Driven Code: Hard to follow control flow. Requires excellent documentation on when handlers are called.
+
+Generic Containers (Pair, std::pair): Obscure meaning due to generic names (key/value). Prefer specific classes/structs with meaningful names. Design for ease of reading, not ease of writing.
+
+Declaration vs. Allocation Type Mismatch: Declaring as List but allocating as ArrayList can be misleading. Prefer matching types where performance/behavior differs.
+
+Violating Expectations: Code that behaves unexpectedly (e.g., main method returning but application continuing via background threads) needs clear documentation.
+
+3.10. Evaluate Design Choices (Chapter 11, Chapter 19):
+
+Design it Twice: Encourage authors (and yourself during review) to consider multiple design alternatives for significant components or interfaces. Comparing pros and cons leads to better final designs (Chapter 11). Don't just accept the first idea.
+
+Critique Trends/Patterns: Evaluate popular trends (Agile, TDD, Design Patterns, Getters/Setters) through the lens of complexity. Do they actually simplify the design and reduce complexity in this specific context? (Chapter 19).
+
+Agile: Good for incrementality, but risk of tactical focus. Increments should be abstractions, not just features (Section 19.2).
+
+Unit Tests: Excellent for enabling refactoring and reducing risk (Section 19.3).
+
+TDD: Risk of tactical focus on features over design (Section 19.4). Write tests first for bugs, but design abstractions holistically.
+
+Design Patterns: Useful if they fit well, dangerous if over-applied or forced (Section 19.5).
+
+Getters/Setters: Often shallow, expose implementation details. Prefer hiding instance variables entirely (Section 19.6).
+
+3.11. Performance Considerations (Chapter 20):
+
+Simplicity == Performance: Clean, simple designs are often faster because they avoid unnecessary work and overhead (Section 20.1). Deep modules reduce layer-crossing overhead. Defining errors out eliminates conditional checks.
+
+Measure First: Optimizations must be justified by measurements identifying bottlenecks (Section 20.2). Do not accept optimizations based on intuition alone.
+
+Optimize the Critical Path: If optimization is needed and adds complexity, focus on making the common case extremely simple and fast, potentially moving special-case handling off the critical path (Section 20.3). Reference the RAMCloud Buffer optimization (Section 20.4).
+
+Complexity Trade-off: Only accept complexity-adding optimizations if the measured performance gain is significant and justifies the added maintenance burden. Ensure the complexity is well-contained.
+
+What NOT to Focus On (Elaborated) Minor Style Issues: If code passes the linter/formatter, don't waste time on subjective preferences like brace placement or variable alignment, unless it genuinely impacts readability or violates a documented team convention aimed at reducing obscurity (e.g., consistent variable declaration order). Focus review energy on structural complexity.
+
+Unnecessary Performance Tweaks: Do not request micro-optimizations (e.g., replacing simple loops with complex stream operations, manual loop unrolling) unless measurements show this specific code is a proven bottleneck and the optimization provides a significant, measured improvement worth the added complexity and potential obscurity.
+
+Author's Idiosyncrasies: The goal is a clean, understandable, consistent system. Focus on whether the code achieves this using the Ousterhout principles and team conventions. Avoid comments like "I would have written it this way" unless "this way" demonstrably reduces complexity based on the principles discussed (e.g., creates a deeper module, eliminates information leakage).
+
+Future-Proofing / Over-Engineering: While modules should be somewhat general-purpose, avoid demanding support for purely hypothetical future requirements that add complexity now. Focus on clean design for current and known near-term needs. (Contrast with making interfaces general enough based on current needs, Chapter 6).
+
+Perfecting Trivial Code: Don't spend excessive time debating the absolute optimal design for extremely simple, short, or boilerplate code if it's already clear and doesn't violate any major principles. Reserve deep design scrutiny for areas with more inherent complexity.
+
+Process and Tone (Elaborated) Constructive Phrasing:
+
+Instead of: "This is too complicated." Try: "Could we simplify this interface by...? This seems to have high cognitive load because..."
+
+Instead of: "You leaked information here." Try: "It looks like knowledge about [X] is present here and also in [Y module]. This is information leakage (Section 5.2). Could we refactor to centralize this knowledge in one place?"
+
+Instead of: "Bad name." Try: "This name (count) is a bit vague (Section 14.3). Could we make it more precise, like numActiveConnections, to better reflect what it represents?"
+
+Justify with Principles: Explicitly link feedback to the Ousterhout principles and Red Flags. This educates and provides objective reasoning (e.g., "This pass-through method (Section 7.1) makes the FooManager class shallower than it could be.").
+
+Ask Questions: Instead of making demands, often asking clarifying questions can lead the author to the same conclusion (e.g., "What happens in this method if the input list is empty? Defining this behavior might simplify the callers (Section 10.3).").
+
+Prioritize Feedback: Clearly distinguish between critical design issues that must be fixed (e.g., information leakage, fundamentally shallow modules) and suggestions for minor improvements.
+
+Conclusion: Building Sustainable Systems Following these Ousterhout-inspired guidelines during code review requires discipline and a shift from a purely tactical to a strategic mindset. It demands that we constantly ask: "Does this change make the system simpler and easier to understand in the long run?"
+
+The investment is substantial, but the rewards – reduced complexity, faster long-term development, fewer bugs, better abstractions, and ultimately, more maintainable and enjoyable software – are transformative. Code review, conducted with a focus on minimizing complexity, is one of the most effective tools we have for achieving these goals.
+
+3.12. React-Specific: Avoid useEffect + setState Antipatterns
+
+Why "useEffect + setState" Often Hurts:
+
+Symptom | What's Really Going On
+Extra re-renders | You render once, then useEffect fires, then you re-render again with updated state. That second pass was only needed because you stored something you could have calculated.
+Spider-web dependencies | When several useEffects write into local state that other useEffects depend on, you get a hidden order of execution and race conditions.
+"Stale" or out-of-sync UI | Because an Effect runs after paint, the screen can briefly show the wrong data.
+Mental overhead | You're forced to keep a dependency array and ask "What happens if this changes?" for every effect, instead of writing a single pure calculation.
+
+useEffect is designed as an escape hatch to synchronize React with external systems (DOM, network, subscriptions, timers). When you use it just to shuffle data inside the component, you're stepping outside React's declarative model for no benefit.
+
+Substitute Approach: "Keep State Minimal, Derive the Rest"
+
+1. Store only what the user or server can mutate: If a value can be expressed as a function of existing state/props, don't stash it in state. Calculate it right where you need it.
+
+2. Derive inside render (or useMemo for heavy work):
+   - Cheap computations → inline: const visibleTodos = showActive ? todos.filter(...) : todos
+   - Expensive computations → useMemo so you still avoid an extra render cycle.
+
+3. Reserve useEffect for side-effects: Only reach for an Effect when you must touch something outside React (e.g., focus an input, start a WebSocket, write to localStorage).
+
+4. Unify related updates: When several fields always change together, group them with useReducer or a single useState object instead of scattering multiple setters.
+
+5. Let the data flow one way: Don't "mirror" parent props into child state. Read the prop directly, or lift the state up if the child needs to change it. Mirroring is the root cause of most sync issues.
+
+6. Prefer pure helpers over lifecycle tricks: Need a count? todos.length. Need unfinished items? todos.filter(t => !t.done). Pure expressions are always in sync, have no timing issues, and are easy to test.
+
+7. Cache outside React when the cost is global: For data that's reused across many components (theme, user session, feature flags), store it in a context or lightweight state manager (Zustand, Jotai, Redux) and read it directly instead of copying it into local state.
+
+Quick Mental Checklist:
+- "Do I really need state here?"
+  - If it's yes + external side-effect, use useEffect.
+  - If it's yes + pure UI data, store the source and compute the rest.
+  - If it's no, just derive.
+
+Following these rules keeps components predictable, performant, and easier to reason about, letting React's reactive model do the heavy lifting instead of juggling Effects.
+Please note, this is just a flow for evaluating anti-patterns, but we should not write comments in our code that explain our decisions.
+
+OK, these are our code review principles. I want you to review the changes on this branch relative to the main branch and the changes that are on files that are not tracked.
+Don't overly fixate on positives, really focus on the things that must be fixed. Be sure to also do the more general checks for code review, like potential bugs, etc. DO NOT WRITE CODE.
+Note that if something is the industry standard way of doing things with shadcn/tailwind/nextjs, then you can ignore it, even if technically it violates one of the principles.
+
+For this check, we are checking the changes on this branch relative to the main branch (PR-style review). Please only comment on changes we made, even if in the process of the review you detect other issues in the files.
