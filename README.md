@@ -64,7 +64,7 @@ rover scan <path> [options]
 **Options:**
 - `--all` - Run all 33 agents (recommended for thorough analysis)
 - `-a, --agent <id>` - Run a specific agent by ID (default: security-auditor)
-- `--concurrency <n>` - Agents to run in parallel with --all (default: 4)
+- `--concurrency <n>` - Agents to run in parallel with --all (default: 8)
 - `--dry-run` - Preview what would be scanned without running
 - `--verbose` - Show detailed output during scan
 
@@ -96,8 +96,8 @@ rover fix <id>... [options]
 7. Worktree is left in place for you to create a PR
 
 **Options:**
-- `--concurrency <n>` - Issues to fix in parallel (default: 4)
-- `--max-iterations <n>` - Max review cycles per issue (default: 5)
+- `--concurrency <n>` - Issues to fix in parallel (default: 8)
+- `--max-iterations <n>` - Max review cycles per issue (default: 10)
 - `--verbose` - Stream all Claude output for debugging
 
 **Examples:**
@@ -175,7 +175,7 @@ rover consolidate [path] [options]
 
 **Options:**
 - `--dry-run` - Preview what would be consolidated without making changes
-- `--concurrency <n>` - Clusters to process in parallel (default: 4)
+- `--concurrency <n>` - Clusters to process in parallel (default: 8)
 
 **Examples:**
 ```bash

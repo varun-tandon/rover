@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import Anthropic from '@anthropic-ai/sdk';
+import { runAgent } from '../agents/agent-runner.js';
 import type { IssueStore, ApprovedIssue, IssueSummary, IssueSeverity } from '../types/index.js';
 import { deleteTicketFile, parseTicketNumber } from './tickets.js';
 
@@ -187,15 +187,7 @@ export async function summarizeExistingIssues(targetPath: string): Promise<strin
     description: issue.description.slice(0, 200)
   }));
 
-  const client = new Anthropic();
-
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-5-20250929',
-    max_tokens: 1024,
-    messages: [
-      {
-        role: 'user',
-        content: `Summarize these ${store.issues.length} code issues into a condensed list for deduplication purposes.
+  const prompt = `Summarize these ${store.issues.length} code issues into a condensed list for deduplication purposes.
 Group similar issues together and create short fingerprints that clearly identify each unique issue.
 
 Format each as: "[Category] short-description (file:lines)"
@@ -204,21 +196,28 @@ Group by file when possible. Be concise but preserve enough detail to identify d
 Issues:
 ${JSON.stringify(issueDetails, null, 2)}
 
-Return ONLY the condensed list, no explanations.`
-      }
-    ]
-  });
+Return ONLY the condensed list, no explanations.`;
 
-  const summaryBlock = response.content.find(block => block.type === 'text');
-  if (!summaryBlock || summaryBlock.type !== 'text') {
-    // Fallback to simple format
-    const summaryLines = store.issues.map(issue =>
-      `- [${issue.category}] "${issue.title}" in ${issue.filePath}`
-    );
-    return `Previously detected issues (${store.issues.length} total):\n${summaryLines.join('\n')}`;
+  try {
+    const result = await runAgent({
+      prompt,
+      cwd: targetPath,
+      allowedTools: [],
+      model: 'haiku', // Use haiku for simple summarization tasks
+    });
+
+    if (result.resultText) {
+      return `Previously detected issues (${store.issues.length} total, summarized):\n${result.resultText}`;
+    }
+  } catch {
+    // Fallback on error
   }
 
-  return `Previously detected issues (${store.issues.length} total, summarized):\n${summaryBlock.text}`;
+  // Fallback to simple format
+  const summaryLines = store.issues.map(issue =>
+    `- [${issue.category}] "${issue.title}" in ${issue.filePath}`
+  );
+  return `Previously detected issues (${store.issues.length} total):\n${summaryLines.join('\n')}`;
 }
 
 /**

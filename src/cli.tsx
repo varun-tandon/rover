@@ -72,7 +72,7 @@ const cli = meow(`
     Options:
       --all             Run ALL 33 agents (recommended for thorough analysis)
       --agent, -a       Run a specific agent by ID (default: security-auditor)
-      --concurrency     Agents to run in parallel with --all (default: 4)
+      --concurrency     Agents to run in parallel with --all (default: 8)
       --dry-run         Preview what would be scanned without running
       --verbose         Show detailed output during scan
 
@@ -99,8 +99,8 @@ const cli = meow(`
       7. Worktree is left in place for you to create a PR
 
     Options:
-      --concurrency         Issues to fix in parallel (default: 4)
-      --max-iterations      Max review cycles per issue (default: 5)
+      --concurrency         Issues to fix in parallel (default: 8)
+      --max-iterations      Max review cycles per issue (default: 10)
       --verbose             Stream all Claude output for debugging
 
     Examples:
@@ -167,7 +167,7 @@ const cli = meow(`
 
     Options:
       --dry-run             Preview what would be consolidated without making changes
-      --concurrency         Clusters to process in parallel (default: 4)
+      --concurrency         Clusters to process in parallel (default: 8)
 
     Examples:
       $ rover consolidate                    # Consolidate in current directory
@@ -246,7 +246,7 @@ const cli = meow(`
     },
     concurrency: {
       type: 'number',
-      default: 4
+      default: 8
     },
     dryRun: {
       type: 'boolean',
@@ -262,7 +262,7 @@ const cli = meow(`
     },
     maxIterations: {
       type: 'number',
-      default: 5
+      default: 10
     },
     draft: {
       type: 'boolean',
@@ -365,7 +365,6 @@ if (command === 'plan') {
       console.log('Summary:');
       console.log(`  - ${result.analysis.parallelGroups.length} parallel workstream(s) identified`);
       console.log(`  - ${result.analysis.dependencies.length} dependency/conflict(s) found`);
-      console.log(`  - Cost: $${result.costUsd.toFixed(4)}`);
       console.log(`  - Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
 
       // Print runnable commands

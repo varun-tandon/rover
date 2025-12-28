@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { runAgent } from './agent-runner.js';
 import type { CandidateIssue } from '../types/index.js';
 import type { ScannerResult, ScannerOptions } from './types.js';
 import { getAgent } from './definitions/index.js';
@@ -20,23 +20,9 @@ import { loadMemory } from '../storage/memory.js';
  * @throws Error if the specified agent ID is not found
  * @throws Error if the underlying AI query fails (network issues, API errors)
  */
-// Model pricing in USD per million tokens (Sonnet 4.5)
-const MODEL_PRICING = {
-  inputPerMillion: 3,
-  outputPerMillion: 15,
-};
-
-/**
- * Calculate cost from token usage
- */
-function calculateCostFromUsage(usage: { input_tokens?: number; output_tokens?: number }): number {
-  const inputTokens = usage.input_tokens ?? 0;
-  const outputTokens = usage.output_tokens ?? 0;
-  return (inputTokens * MODEL_PRICING.inputPerMillion + outputTokens * MODEL_PRICING.outputPerMillion) / 1_000_000;
-}
 
 export async function runScanner(options: ScannerOptions): Promise<ScannerResult> {
-  const { targetPath, agentId, onProgress, onCostUpdate } = options;
+  const { targetPath, agentId, onProgress } = options;
 
   const agentDef = getAgent(agentId);
   if (!agentDef) {
@@ -52,7 +38,6 @@ export async function runScanner(options: ScannerOptions): Promise<ScannerResult
   onProgress?.(`Starting scan with ${agentDef.name}...`);
 
   const startTime = Date.now();
-  let totalCost = 0;
   let issues: CandidateIssue[] = [];
 
   const memorySection = memoryContent
@@ -92,51 +77,14 @@ Each issue in the array should have:
 Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
 
   try {
-    const agentQuery = query({
+    const result = await runAgent({
       prompt,
-      options: {
-        model: 'claude-sonnet-4-5-20250929',
-        allowedTools: ['Glob', 'Grep', 'Read'],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        cwd: targetPath,
-        maxTurns: 50,
-      }
+      cwd: targetPath,
+      allowedTools: ['Glob', 'Grep', 'Read'],
+      onProgress,
     });
 
-    let resultText = '';
-    let runningCost = 0;
-
-    for await (const message of agentQuery) {
-      if (message.type === 'result' && message.subtype === 'success') {
-        resultText = message.result;
-        totalCost = message.total_cost_usd;
-        onCostUpdate?.(totalCost);
-      }
-
-      // Progress updates from assistant messages
-      if (message.type === 'assistant') {
-        // Track realtime cost from usage
-        const usage = message.message.usage;
-        if (usage) {
-          runningCost += calculateCostFromUsage(usage);
-          onCostUpdate?.(runningCost);
-        }
-
-        const content = message.message.content;
-        for (const block of content) {
-          if (block.type === 'tool_use') {
-            if (block.name === 'Glob') {
-              onProgress?.(`Searching for files: ${(block.input as { pattern?: string }).pattern ?? 'unknown pattern'}`);
-            } else if (block.name === 'Read') {
-              onProgress?.(`Reading: ${(block.input as { file_path?: string }).file_path ?? 'unknown file'}`);
-            } else if (block.name === 'Grep') {
-              onProgress?.(`Searching for: ${(block.input as { pattern?: string }).pattern ?? 'unknown pattern'}`);
-            }
-          }
-        }
-      }
-    }
+    const resultText = result.resultText;
 
     // Parse the result
     if (resultText) {
@@ -177,6 +125,5 @@ Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
     issues,
     durationMs,
     filesScanned: 0, // We don't track this currently
-    costUsd: totalCost
   };
 }

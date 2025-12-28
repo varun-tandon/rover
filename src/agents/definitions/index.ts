@@ -11,6 +11,7 @@ import { boilerplateBuster } from './boilerplate-buster.js';
 import { obviousnessAuditor } from './obviousness-auditor.js';
 import { whyAsker } from './why-asker.js';
 import { namingRenovator } from './naming-renovator.js';
+import { commentNoiseDetector } from './comment-noise-detector.js';
 
 // Consistency agents
 import { consistencyCop } from './consistency-cop.js';
@@ -18,6 +19,13 @@ import { consistencyCop } from './consistency-cop.js';
 // Bug detection agents
 import { exceptionAuditor } from './exception-auditor.js';
 import { logicDetective } from './logic-detective.js';
+import { concurrencyAuditor } from './concurrency-auditor.js';
+
+// Accessibility agents
+import { accessibilityAuditor } from './accessibility-auditor.js';
+
+// State architecture agents
+import { stateArchitectureAuditor } from './state-architecture-auditor.js';
 
 // Config agents
 import { configCleaner } from './config-cleaner.js';
@@ -47,6 +55,7 @@ import { nextjsAssetOptimizer } from './nextjs-asset-optimizer.js';
 import { hydrationMismatchDetector } from './hydration-mismatch-detector.js';
 import { navigationPatternEnforcer } from './navigation-pattern-enforcer.js';
 import { metadataChecker } from './metadata-checker.js';
+import { designSystemEnforcer } from './design-system-enforcer.js';
 
 // Consolidated agents
 import { reactPatternsAuditor } from './react-patterns-auditor.js';
@@ -54,6 +63,13 @@ import { nextjsRenderingOptimizer } from './nextjs-rendering-optimizer.js';
 import { bundlePerformanceAuditor } from './bundle-performance-auditor.js';
 import { securityAuditor } from './security-auditor.js';
 import { typescriptQualityAuditor } from './typescript-quality-auditor.js';
+
+// Consistency and migration agents
+import { apiRouteConsistencyAuditor } from './api-route-consistency-auditor.js';
+import { partialMigrationDetector } from './partial-migration-detector.js';
+import { stateDuplicationAuditor } from './state-duplication-auditor.js';
+import { dataFetchingConsistencyAuditor } from './data-fetching-consistency-auditor.js';
+import { asyncFireAndForgetDetector } from './async-fire-and-forget-detector.js';
 
 /**
  * Registry of all available scanning agents
@@ -70,6 +86,7 @@ export const agents: Record<string, AgentDefinition> = {
   'obviousness-auditor': obviousnessAuditor,
   'why-asker': whyAsker,
   'naming-renovator': namingRenovator,
+  'comment-noise-detector': commentNoiseDetector,
 
   // Consistency
   'consistency-cop': consistencyCop,
@@ -77,6 +94,13 @@ export const agents: Record<string, AgentDefinition> = {
   // Bug detection
   'exception-auditor': exceptionAuditor,
   'logic-detective': logicDetective,
+  'concurrency-auditor': concurrencyAuditor,
+
+  // Accessibility
+  'accessibility-auditor': accessibilityAuditor,
+
+  // State architecture
+  'state-architecture-auditor': stateArchitectureAuditor,
 
   // Config
   'config-cleaner': configCleaner,
@@ -106,6 +130,7 @@ export const agents: Record<string, AgentDefinition> = {
   'hydration-mismatch-detector': hydrationMismatchDetector,
   'navigation-pattern-enforcer': navigationPatternEnforcer,
   'metadata-checker': metadataChecker,
+  'design-system-enforcer': designSystemEnforcer,
 
   // Consolidated agents
   'react-patterns-auditor': reactPatternsAuditor,
@@ -113,6 +138,13 @@ export const agents: Record<string, AgentDefinition> = {
   'bundle-performance-auditor': bundlePerformanceAuditor,
   'security-auditor': securityAuditor,
   'typescript-quality-auditor': typescriptQualityAuditor,
+
+  // Consistency and migration agents
+  'api-route-consistency-auditor': apiRouteConsistencyAuditor,
+  'partial-migration-detector': partialMigrationDetector,
+  'state-duplication-auditor': stateDuplicationAuditor,
+  'data-fetching-consistency-auditor': dataFetchingConsistencyAuditor,
+  'async-fire-and-forget-detector': asyncFireAndForgetDetector,
 };
 
 /**
@@ -149,6 +181,7 @@ export {
   obviousnessAuditor,
   whyAsker,
   namingRenovator,
+  commentNoiseDetector,
 
   // Consistency
   consistencyCop,
@@ -156,6 +189,13 @@ export {
   // Bug detection
   exceptionAuditor,
   logicDetective,
+  concurrencyAuditor,
+
+  // Accessibility
+  accessibilityAuditor,
+
+  // State architecture
+  stateArchitectureAuditor,
 
   // Config
   configCleaner,
@@ -185,6 +225,7 @@ export {
   hydrationMismatchDetector,
   navigationPatternEnforcer,
   metadataChecker,
+  designSystemEnforcer,
 
   // Consolidated agents
   reactPatternsAuditor,
@@ -192,4 +233,11 @@ export {
   bundlePerformanceAuditor,
   securityAuditor,
   typescriptQualityAuditor,
+
+  // Consistency and migration agents
+  apiRouteConsistencyAuditor,
+  partialMigrationDetector,
+  stateDuplicationAuditor,
+  dataFetchingConsistencyAuditor,
+  asyncFireAndForgetDetector,
 };

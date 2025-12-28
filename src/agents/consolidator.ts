@@ -3,7 +3,7 @@
  * Uses an LLM to analyze the issues and produce a merged version.
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { runAgent } from './agent-runner.js';
 import type { ApprovedIssue, IssueCluster, IssueSeverity } from '../types/index.js';
 import { extractTicketId } from '../storage/tickets.js';
 
@@ -29,8 +29,6 @@ export interface ConsolidatorResult {
   originalIssueIds: string[];
   /** Duration in milliseconds */
   durationMs: number;
-  /** Cost in USD */
-  costUsd: number;
 }
 
 /**
@@ -90,7 +88,6 @@ export async function runConsolidator(options: ConsolidatorOptions): Promise<Con
   const { targetPath, cluster, onProgress } = options;
 
   const startTime = Date.now();
-  let totalCost = 0;
 
   onProgress?.(`Consolidating ${cluster.issues.length} issues: ${cluster.reason}`);
 
@@ -140,36 +137,14 @@ ${uniqueFilePaths.map(fp => `   - ${fp}`).join('\n')}
 Return ONLY the JSON object. No markdown, no explanations.`;
 
   try {
-    const agentQuery = query({
+    const result = await runAgent({
       prompt,
-      options: {
-        model: 'claude-sonnet-4-5-20250929',
-        allowedTools: ['Read'],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        cwd: targetPath,
-        maxTurns: 20
-      }
+      cwd: targetPath,
+      allowedTools: ['Read'],
+      onProgress,
     });
 
-    let resultText = '';
-
-    for await (const message of agentQuery) {
-      if (message.type === 'result' && message.subtype === 'success') {
-        resultText = message.result;
-        totalCost = message.total_cost_usd;
-      }
-
-      // Progress updates
-      if (message.type === 'assistant') {
-        const content = message.message.content;
-        for (const block of content) {
-          if (block.type === 'tool_use' && block.name === 'Read') {
-            onProgress?.(`Reading: ${(block.input as { file_path?: string }).file_path ?? 'unknown file'}`);
-          }
-        }
-      }
-    }
+    const resultText = result.resultText;
 
     // Parse the result
     if (!resultText) {
@@ -217,7 +192,6 @@ Return ONLY the JSON object. No markdown, no explanations.`;
       consolidatedIssue,
       originalIssueIds,
       durationMs,
-      costUsd: totalCost
     };
   } catch (error) {
     onProgress?.(`Error during consolidation: ${error instanceof Error ? error.message : 'Unknown error'}`);

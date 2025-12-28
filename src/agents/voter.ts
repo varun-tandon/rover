@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { runAgent } from './agent-runner.js';
 import type { CandidateIssue, Vote } from '../types/index.js';
 import type { VoterResult, VoterOptions } from './types.js';
 import { getAgent } from './definitions/index.js';
@@ -28,7 +28,6 @@ export async function runVoter(options: VoterOptions): Promise<VoterResult> {
   }
 
   const startTime = Date.now();
-  let totalCost = 0;
   const votes: Vote[] = [];
 
   // Vote on each issue sequentially
@@ -71,26 +70,13 @@ Reject issues that are false positives, overly pedantic, or where the fix would 
 Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
 
     try {
-      const voterQuery = query({
+      const result = await runAgent({
         prompt,
-        options: {
-          model: 'claude-sonnet-4-5-20250929',
-          allowedTools: ['Read'],
-          permissionMode: 'bypassPermissions',
-          allowDangerouslySkipPermissions: true,
-          cwd: targetPath,
-          maxTurns: 10,
-        }
+        cwd: targetPath,
+        allowedTools: ['Read'],
       });
 
-      let resultText = '';
-
-      for await (const message of voterQuery) {
-        if (message.type === 'result' && message.subtype === 'success') {
-          resultText = message.result;
-          totalCost += message.total_cost_usd;
-        }
-      }
+      const resultText = result.resultText;
 
       // Parse the vote
       let approve = false;
@@ -136,7 +122,6 @@ Return ONLY valid JSON. No markdown, no explanations outside the JSON.`;
     voterId,
     votes,
     durationMs,
-    costUsd: totalCost
   };
 }
 

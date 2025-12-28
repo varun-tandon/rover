@@ -32,7 +32,6 @@ interface ConsolidationSummary {
   issuesConsolidated: number;
   newTicketsCreated: string[];
   originalTicketsRemoved: string[];
-  totalCostUsd: number;
   totalDurationMs: number;
 }
 
@@ -101,7 +100,6 @@ export function ConsolidateApp({ targetPath, flags }: ConsolidateAppProps) {
             issuesConsolidated: 0,
             newTicketsCreated: [],
             originalTicketsRemoved: [],
-            totalCostUsd: 0,
             totalDurationMs: 0
           });
           setPhase('complete');
@@ -132,7 +130,6 @@ export function ConsolidateApp({ targetPath, flags }: ConsolidateAppProps) {
         // Process clusters in parallel using work queue pattern
         const clusterResults: ClusterResult[] = [];
         const workQueue = [...issueClusters];
-        let totalCostUsd = 0;
         let totalDurationMs = 0;
 
         // Worker function
@@ -164,7 +161,6 @@ export function ConsolidateApp({ targetPath, flags }: ConsolidateAppProps) {
               });
 
               clusterResults.push({ cluster, result: consolidatorResult });
-              totalCostUsd += consolidatorResult.costUsd;
               totalDurationMs += consolidatorResult.durationMs;
 
               // Update status to complete (file changes applied later)
@@ -212,7 +208,6 @@ export function ConsolidateApp({ targetPath, flags }: ConsolidateAppProps) {
           issuesConsolidated: 0,
           newTicketsCreated: [],
           originalTicketsRemoved: [],
-          totalCostUsd,
           totalDurationMs
         };
 
@@ -402,10 +397,6 @@ export function ConsolidateApp({ targetPath, flags }: ConsolidateAppProps) {
                   <Box>
                     <Text dimColor>Duration: </Text>
                     <Text>{(result.totalDurationMs / 1000).toFixed(1)}s</Text>
-                  </Box>
-                  <Box>
-                    <Text dimColor>Cost: </Text>
-                    <Text>${result.totalCostUsd.toFixed(4)}</Text>
                   </Box>
                 </Box>
 

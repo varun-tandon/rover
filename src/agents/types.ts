@@ -10,8 +10,6 @@ export interface ScannerResult {
   durationMs: number;
   /** Files scanned */
   filesScanned: number;
-  /** Cost in USD */
-  costUsd: number;
 }
 
 /**
@@ -24,8 +22,6 @@ export interface VoterResult {
   votes: Vote[];
   /** Duration in milliseconds */
   durationMs: number;
-  /** Cost in USD */
-  costUsd: number;
 }
 
 /**
@@ -66,15 +62,6 @@ export interface ScannerOptions {
    * @param message - Human-readable description of current activity
    */
   onProgress?: (message: string) => void;
-  /**
-   * Callback for realtime cost updates during scanning.
-   *
-   * Called whenever the cumulative cost changes, typically after each
-   * AI model response. Used to display real-time cost in the terminal UI.
-   *
-   * @param costUsd - Current cumulative cost in USD
-   */
-  onCostUpdate?: (costUsd: number) => void;
 }
 
 /**

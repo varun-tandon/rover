@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { runAgent } from '../agents/agent-runner.js';
 import type { ReviewItem, ReviewAnalysis } from './types.js';
 import { filterIgnoredFiles, filterDiffByRoverignore } from '../storage/roverignore.js';
 
@@ -535,24 +535,13 @@ Rules:
 Return ONLY the JSON, no markdown, no explanation.`;
 
   try {
-    const agentQuery = query({
+    const result = await runAgent({
       prompt: parsePrompt,
-      options: {
-        model: 'claude-sonnet-4-5-20250929',
-        allowedTools: [],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        maxTurns: 1,
-      },
+      cwd: process.cwd(),
+      allowedTools: [],
     });
 
-    let resultText = '';
-
-    for await (const message of agentQuery) {
-      if (message.type === 'result' && message.subtype === 'success') {
-        resultText = message.result;
-      }
-    }
+    const resultText = result.resultText;
 
     // Parse the JSON response
     const jsonMatch = resultText.match(/\{[\s\S]*\}/);
@@ -660,23 +649,13 @@ Return JSON:
 Return ONLY the JSON, no markdown, no explanation.`;
 
   try {
-    const agentQuery = query({
+    const result = await runAgent({
       prompt: verifyPrompt,
-      options: {
-        model: 'claude-sonnet-4-5-20250929',
-        allowedTools: [],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        maxTurns: 1,
-      },
+      cwd: process.cwd(),
+      allowedTools: [],
     });
 
-    let resultText = '';
-    for await (const message of agentQuery) {
-      if (message.type === 'result' && message.subtype === 'success') {
-        resultText = message.result;
-      }
-    }
+    const resultText = result.resultText;
 
     // Parse response
     const jsonMatch = resultText.match(/\{[\s\S]*\}/);

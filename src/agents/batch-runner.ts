@@ -62,8 +62,6 @@ export interface BatchRunResult {
   totalTickets: number;
   /** Total elapsed time for the batch run in milliseconds */
   totalDurationMs: number;
-  /** Total estimated cost in USD for all API calls */
-  totalCostUsd: number;
   /** Number of agents that failed during execution */
   failedAgents: number;
   /** Number of agents skipped (already completed in resumed run) */
@@ -200,7 +198,7 @@ async function runSingleAgent(
  * @param targetPath - Absolute path to the codebase directory to scan
  * @param agentIds - List of specific agent IDs to run, or 'all' to run all registered agents
  * @param options - Configuration options for batch execution
- * @param options.concurrency - Maximum number of agents to run in parallel (default: 4)
+ * @param options.concurrency - Maximum number of agents to run in parallel (default: 8)
  * @param options.onProgress - Callback invoked with progress updates during scan/vote/arbitrate phases
  * @param options.onAgentComplete - Callback invoked when each agent completes (success or failure)
  * @returns Aggregated results including individual agent results and summary statistics
@@ -280,7 +278,7 @@ export async function runAgentsBatched(
         const failedResult: AgentResult = {
           agentId,
           agentName: agent?.name ?? agentId,
-          scanResult: { issues: [], durationMs: 0, filesScanned: 0, costUsd: 0 },
+          scanResult: { issues: [], durationMs: 0, filesScanned: 0 },
           voterResults: [],
           arbitratorResult: { approvedIssues: [], rejectedIssues: [], ticketsCreated: [] },
           error: errorMessage
@@ -306,11 +304,9 @@ export async function runAgentsBatched(
       totalApprovedIssues: acc.totalApprovedIssues + result.arbitratorResult.approvedIssues.length,
       totalRejectedIssues: acc.totalRejectedIssues + result.arbitratorResult.rejectedIssues.length,
       totalTickets: acc.totalTickets + result.arbitratorResult.ticketsCreated.length,
-      totalCostUsd: acc.totalCostUsd + result.scanResult.costUsd +
-        result.voterResults.reduce((sum, vr) => sum + vr.costUsd, 0),
       failedAgents: acc.failedAgents + (result.error !== undefined ? 1 : 0)
     }),
-    { totalCandidateIssues: 0, totalApprovedIssues: 0, totalRejectedIssues: 0, totalTickets: 0, totalCostUsd: 0, failedAgents: 0 }
+    { totalCandidateIssues: 0, totalApprovedIssues: 0, totalRejectedIssues: 0, totalTickets: 0, failedAgents: 0 }
   );
 
   return {
@@ -320,7 +316,6 @@ export async function runAgentsBatched(
     totalRejectedIssues: aggregated.totalRejectedIssues,
     totalTickets: aggregated.totalTickets,
     totalDurationMs: Date.now() - startTime,
-    totalCostUsd: aggregated.totalCostUsd,
     failedAgents: aggregated.failedAgents,
     skippedAgents: skippedCount
   };

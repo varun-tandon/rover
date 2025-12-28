@@ -3,7 +3,8 @@
  * Uses an LLM to infer logical dependencies between issues.
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import path from 'path';
+import { runAgent } from './agent-runner.js';
 import type { ApprovedIssue, DependencyAnalysis, IssueDependency, ParallelGroup } from '../types/index.js';
 import { extractTicketId } from '../storage/tickets.js';
 
@@ -27,21 +28,30 @@ export interface PlannerResult {
   analysis: DependencyAnalysis;
   /** Duration in milliseconds */
   durationMs: number;
-  /** Cost in USD */
-  costUsd: number;
+}
+
+/**
+ * Convert a file path to absolute if it's relative
+ */
+function toAbsolutePath(filePath: string, targetPath: string): string {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
+  }
+  return path.join(targetPath, filePath);
 }
 
 /**
  * Format an issue for inclusion in the prompt
  */
-function formatIssueForPrompt(issue: ApprovedIssue): string {
+function formatIssueForPrompt(issue: ApprovedIssue, targetPath: string): string {
   const ticketId = extractTicketId(issue.ticketPath) ?? issue.id;
+  const absoluteFilePath = toAbsolutePath(issue.filePath, targetPath);
   const lines = [
     `### ${ticketId}`,
     `- **Title**: ${issue.title}`,
     `- **Severity**: ${issue.severity}`,
     `- **Category**: ${issue.category}`,
-    `- **File**: ${issue.filePath}${issue.lineRange ? `:${issue.lineRange.start}-${issue.lineRange.end}` : ''}`,
+    `- **File**: ${absoluteFilePath}${issue.lineRange ? `:${issue.lineRange.start}-${issue.lineRange.end}` : ''}`,
     `- **Description**: ${issue.description}`,
     `- **Recommendation**: ${issue.recommendation}`
   ];
@@ -60,12 +70,11 @@ export async function runPlanner(options: PlannerOptions): Promise<PlannerResult
   const { targetPath, issues, onProgress } = options;
 
   const startTime = Date.now();
-  let totalCost = 0;
 
   onProgress?.(`Analyzing dependencies for ${issues.length} issues...`);
 
-  // Collect unique file paths from all issues
-  const uniqueFilePaths = [...new Set(issues.map(i => i.filePath))];
+  // Collect unique file paths from all issues (converted to absolute paths)
+  const uniqueFilePaths = [...new Set(issues.map(i => toAbsolutePath(i.filePath, targetPath)))];
 
   // Get all ticket IDs for reference
   const ticketIds = issues.map(issue => extractTicketId(issue.ticketPath) ?? issue.id);
@@ -85,14 +94,14 @@ Analyze the provided issues and determine:
 
 ## ISSUES TO ANALYZE
 
-${issues.map(formatIssueForPrompt).join('\n\n---\n\n')}
+${issues.map(issue => formatIssueForPrompt(issue, targetPath)).join('\n\n---\n\n')}
 
 ## AFFECTED FILES
 ${uniqueFilePaths.map(fp => `- ${fp}`).join('\n')}
 
 ## INSTRUCTIONS
 
-1. Read the code files listed above to understand the actual code structure
+1. Read the code files listed above to understand the actual code structure. Use the EXACT file paths provided - do not modify or guess different paths.
 2. Analyze relationships between issues:
    - Look for shared functions, components, or modules
    - Identify data flow dependencies (A produces what B consumes)
@@ -131,40 +140,14 @@ Return ONLY valid JSON with this exact structure:
 Return ONLY the JSON object. No markdown, no explanations outside the JSON.`;
 
   try {
-    const agentQuery = query({
+    const result = await runAgent({
       prompt,
-      options: {
-        model: 'claude-sonnet-4-5-20250929',
-        allowedTools: ['Read', 'Grep'],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        cwd: targetPath,
-        maxTurns: 30
-      }
+      cwd: targetPath,
+      allowedTools: ['Read', 'Grep'],
+      onProgress,
     });
 
-    let resultText = '';
-
-    for await (const message of agentQuery) {
-      if (message.type === 'result' && message.subtype === 'success') {
-        resultText = message.result;
-        totalCost = message.total_cost_usd;
-      }
-
-      // Progress updates
-      if (message.type === 'assistant') {
-        const content = message.message.content;
-        for (const block of content) {
-          if (block.type === 'tool_use') {
-            if (block.name === 'Read') {
-              onProgress?.(`Reading: ${(block.input as { file_path?: string }).file_path ?? 'unknown file'}`);
-            } else if (block.name === 'Grep') {
-              onProgress?.(`Searching: ${(block.input as { pattern?: string }).pattern ?? 'unknown pattern'}`);
-            }
-          }
-        }
-      }
-    }
+    const resultText = result.resultText;
 
     // Parse the result
     if (!resultText) {
@@ -240,7 +223,6 @@ Return ONLY the JSON object. No markdown, no explanations outside the JSON.`;
     return {
       analysis,
       durationMs,
-      costUsd: totalCost
     };
   } catch (error) {
     onProgress?.(`Error during planning: ${error instanceof Error ? error.message : 'Unknown error'}`);

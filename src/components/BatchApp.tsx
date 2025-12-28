@@ -161,7 +161,6 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
                 approvedIssues: agentResult.arbitratorResult.approvedIssues.length,
                 rejectedIssues: agentResult.arbitratorResult.rejectedIssues.length,
                 ticketsCreated: agentResult.arbitratorResult.ticketsCreated.length,
-                costUsd: agentResult.scanResult.costUsd
               };
             }
 
@@ -280,10 +279,6 @@ export function BatchApp({ targetPath, flags }: BatchAppProps) {
               <Box>
                 <Text dimColor>Duration: </Text>
                 <Text>{(result.totalDurationMs / 1000).toFixed(1)}s</Text>
-              </Box>
-              <Box>
-                <Text dimColor>Cost: </Text>
-                <Text>${result.totalCostUsd.toFixed(4)}</Text>
               </Box>
             </Box>
 

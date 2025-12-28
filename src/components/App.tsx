@@ -130,11 +130,9 @@ export function App({ command, targetPath, flags }: AppProps) {
           agentId,
           existingIssues: [],
           onProgress: throttledSetScanMessage,
-          onCostUpdate: throttledSetScanCost
         });
 
         setCandidateIssues(scanResult.issues);
-        cost += scanResult.costUsd;
 
         // If no issues found, skip to complete
         if (scanResult.issues.length === 0) {
@@ -169,7 +167,6 @@ export function App({ command, targetPath, flags }: AppProps) {
 
         const allVotes = voterResults.flatMap(voterResult => voterResult.votes);
         setVotes(allVotes);
-        cost += voterResults.reduce((sum, voterResult) => sum + voterResult.costUsd, 0);
 
         // Phase 3: Arbitration
         setPhase('arbitrating');

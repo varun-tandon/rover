@@ -26,7 +26,6 @@ export interface AgentResultSummary {
   approvedIssues: number;
   rejectedIssues: number;
   ticketsCreated: number;
-  costUsd: number;
 }
 
 /**
