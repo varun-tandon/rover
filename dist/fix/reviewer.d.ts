@@ -53,9 +53,9 @@ export declare function parseReviewForActionables(reviewOutput: string): Promise
 export declare function hasActionableItems(analysis: ReviewAnalysis): boolean;
 /**
  * Verify that Claude's dismissal of review findings is legitimate.
- * Uses a skeptical reviewer to check each must_fix item.
+ * Uses a skeptical reviewer to check each actionable item (must_fix or should_fix).
  */
-export declare function verifyReviewDismissal(mustFixItems: ReviewItem[], claudeJustification: string, _worktreePath: string, options?: {
+export declare function verifyReviewDismissal(itemsToVerify: ReviewItem[], claudeJustification: string, _worktreePath: string, options?: {
     onProgress?: (msg: string) => void;
 }): Promise<{
     allVerified: boolean;

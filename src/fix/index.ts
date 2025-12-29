@@ -351,14 +351,14 @@ async function fixSingleIssue(
 
     // Check if Claude determined the review feedback was not applicable (iterations > 1)
     if (iteration > 1 && isReviewNotApplicable(claudeResult.output)) {
-      // Get must_fix items from previous iteration's review
+      // Get must_fix and should_fix items from previous iteration's review
       const previousReview = trace.iterations[iteration - 2]?.review;
-      const mustFixItems = (previousReview?.parsedItems ?? []).filter(
-        (item: ReviewItem) => item.severity === 'must_fix'
+      const itemsToVerify = (previousReview?.parsedItems ?? []).filter(
+        (item: ReviewItem) => item.severity === 'must_fix' || item.severity === 'should_fix'
       );
 
-      // If there were must_fix items, verify the dismissal
-      if (mustFixItems.length > 0) {
+      // If there were actionable items, verify the dismissal
+      if (itemsToVerify.length > 0) {
         onProgress({
           issueId: issue.id,
           phase: 'reviewing',
@@ -369,7 +369,7 @@ async function fixSingleIssue(
 
         const justification = extractDismissalJustification(claudeResult.output);
         const verification = await verifyReviewDismissal(
-          mustFixItems,
+          itemsToVerify,
           justification,
           worktreePath
         );
@@ -397,7 +397,7 @@ async function fixSingleIssue(
         }
       }
 
-      // All dismissals verified (or no must_fix items) - accept and complete
+      // All dismissals verified (or no actionable items) - accept and complete
       iterationTrace.reviewNotApplicable = true;
       iterationTrace.completedAt = new Date().toISOString();
       trace.iterations.push(iterationTrace);

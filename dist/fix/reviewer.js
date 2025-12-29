@@ -579,17 +579,17 @@ export function hasActionableItems(analysis) {
 }
 /**
  * Verify that Claude's dismissal of review findings is legitimate.
- * Uses a skeptical reviewer to check each must_fix item.
+ * Uses a skeptical reviewer to check each actionable item (must_fix or should_fix).
  */
-export async function verifyReviewDismissal(mustFixItems, claudeJustification, _worktreePath, options) {
-    if (mustFixItems.length === 0) {
+export async function verifyReviewDismissal(itemsToVerify, claudeJustification, _worktreePath, options) {
+    if (itemsToVerify.length === 0) {
         return { allVerified: true, remainingItems: [] };
     }
     options?.onProgress?.('Verifying review dismissal...');
     const verifyPrompt = `You are a skeptical code reviewer verifying whether review findings were correctly dismissed.
 
-ORIGINAL FINDINGS (marked as must_fix):
-${mustFixItems.map((item, i) => `${i + 1}. ${item.description}${item.file ? ` (${item.file})` : ''}`).join('\n')}
+ORIGINAL FINDINGS (must_fix or should_fix severity):
+${itemsToVerify.map((item, i) => `${i + 1}. [${item.severity}] ${item.description}${item.file ? ` (${item.file})` : ''}`).join('\n')}
 
 CLAUDE'S JUSTIFICATION FOR DISMISSING THEM:
 ${claudeJustification}
@@ -628,15 +628,15 @@ Return ONLY the JSON, no markdown, no explanation.`;
         const jsonMatch = resultText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
             // Parse failed - be conservative, keep all items
-            return { allVerified: false, remainingItems: mustFixItems };
+            return { allVerified: false, remainingItems: itemsToVerify };
         }
         const parsed = JSON.parse(jsonMatch[0]);
         const remainingItems = [];
         for (const item of parsed.items ?? []) {
-            if (!item.valid && item.index !== undefined && item.index >= 1 && item.index <= mustFixItems.length) {
-                const mustFixItem = mustFixItems[item.index - 1];
-                if (mustFixItem) {
-                    remainingItems.push(mustFixItem);
+            if (!item.valid && item.index !== undefined && item.index >= 1 && item.index <= itemsToVerify.length) {
+                const originalItem = itemsToVerify[item.index - 1];
+                if (originalItem) {
+                    remainingItems.push(originalItem);
                 }
             }
         }
@@ -648,6 +648,6 @@ Return ONLY the JSON, no markdown, no explanation.`;
     catch (error) {
         // On error, be conservative - don't verify
         console.error('Error verifying review dismissal:', error);
-        return { allVerified: false, remainingItems: mustFixItems };
+        return { allVerified: false, remainingItems: itemsToVerify };
     }
 }
