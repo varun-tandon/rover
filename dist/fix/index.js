@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { createWorktree, generateUniqueBranchName, removeWorktree } from './worktree.js';
 import { runClaude, buildInitialFixPrompt, buildIterationPrompt, isAlreadyFixed, isReviewNotApplicable, extractDismissalJustification } from './claude-runner.js';
 import { runFullReview, parseReviewForActionables, hasActionableItems, verifyReviewDismissal } from './reviewer.js';
+import { runValidation, validationPassed, formatValidationErrors } from './validator.js';
 import { getTicketPathById } from '../storage/tickets.js';
 import { removeIssues } from '../storage/issues.js';
 import { getOrCreateFixState, saveFixState, saveFixTrace, upsertFixRecord, } from '../storage/fix-state.js';
@@ -256,6 +257,35 @@ async function fixSingleIssue(issue, originalPath, maxIterations, verbose, onPro
                 durationMs: Date.now() - startTime,
             });
         }
+        // Step 2.5: Run validation (typecheck, build, lint)
+        onProgress({
+            issueId: issue.id,
+            phase: 'fixing',
+            iteration,
+            maxIterations,
+            message: 'Running validation checks (typecheck, build, lint)...',
+        });
+        const validation = await runValidation(worktreePath, verbose);
+        iterationTrace.validation = validation;
+        if (!validationPassed(validation)) {
+            // Validation failed - run Claude again with the validation errors
+            const validationErrors = formatValidationErrors(validation);
+            onProgress({
+                issueId: issue.id,
+                phase: 'fixing',
+                iteration,
+                maxIterations,
+                message: 'Validation failed - asking Claude to fix errors...',
+            });
+            iterationTrace.completedAt = new Date().toISOString();
+            trace.iterations.push(iterationTrace);
+            // Continue to next iteration with validation errors
+            lastActionableItems = [{
+                    severity: 'must_fix',
+                    description: `Fix the following validation errors:\n\n${validationErrors}`,
+                }];
+            continue;
+        }
         // Check if Claude determined the review feedback was not applicable (iterations > 1)
         if (iteration > 1 && isReviewNotApplicable(claudeResult.output)) {
             // Get must_fix items from previous iteration's review
@@ -356,6 +386,7 @@ async function fixSingleIssue(issue, originalPath, maxIterations, verbose, onPro
         iterationTrace.review = {
             architectureOutput: fullReview.architectureReview,
             bugOutput: fullReview.bugReview,
+            performanceOutput: fullReview.performanceReview,
             completenessOutput: fullReview.completenessReview,
             combinedOutput: fullReview.combined,
             parsedItems: analysis.items,
@@ -698,6 +729,31 @@ export async function runBatchFix(options, onProgress) {
             error: 'No issues were successfully fixed',
         };
     }
+    // Run validation checks before review
+    onProgress({
+        phase: 'reviewing',
+        totalIssues: issues.length,
+        message: 'Running validation checks (typecheck, build, lint)...',
+    });
+    const initialValidation = await runValidation(worktreePath, verbose);
+    if (!validationPassed(initialValidation)) {
+        onProgress({
+            phase: 'error',
+            totalIssues: issues.length,
+            message: 'Validation failed after batch fix',
+        });
+        return {
+            branchName,
+            worktreePath,
+            issueResults,
+            status: 'error',
+            successCount,
+            failedCount: issueResults.filter(r => r.status !== 'success').length,
+            iterations: 0,
+            durationMs: Date.now() - startTime,
+            error: `Validation failed:\n\n${formatValidationErrors(initialValidation)}`,
+        };
+    }
     // Run combined review at the end
     let lastActionableItems = [];
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
@@ -806,6 +862,30 @@ export async function runBatchFix(options, onProgress) {
             }
             catch {
                 // Continue to next review even if this fails
+            }
+            // Run validation after addressing feedback
+            onProgress({
+                phase: 'fixing',
+                totalIssues: issues.length,
+                message: 'Running validation checks...',
+                iteration,
+                maxIterations,
+            });
+            const validation = await runValidation(worktreePath, verbose);
+            if (!validationPassed(validation)) {
+                // Validation failed - this counts as an actionable item for next iteration
+                onProgress({
+                    phase: 'fixing',
+                    totalIssues: issues.length,
+                    message: 'Validation failed - will retry in next iteration',
+                    iteration,
+                    maxIterations,
+                });
+                lastActionableItems = [{
+                        severity: 'must_fix',
+                        description: `Fix the following validation errors:\n\n${formatValidationErrors(validation)}`,
+                    }];
+                continue;
             }
             lastActionableItems = analysis.items.filter(i => i.severity === 'must_fix' || i.severity === 'should_fix');
         }

@@ -1,0 +1,145 @@
+Performance-Focused Code Review: Finding Inefficiencies and Bottlenecks
+
+You are reviewing code changes for performance issues, inefficiencies, and potential bottlenecks. Focus on finding issues that will cause slow response times, high resource usage, or poor scalability.
+
+## Critical Performance Categories
+
+### 1. Database Query Performance
+- **N+1 Query Patterns**: Loops that execute queries on each iteration instead of batching
+- **Missing Indexes**: Queries on non-indexed columns in WHERE, JOIN, or ORDER BY clauses
+- **SELECT * Overuse**: Fetching all columns when only a few are needed
+- **Missing Pagination**: Queries that could return large result sets without LIMIT/OFFSET
+- **Hot Path Queries**: Database calls in frequently-executed code paths (e.g., auth checks, middleware, per-request handlers)
+- **Missing Query Caching**: Repeated identical queries without caching layer
+- **Cartesian Products**: JOIN operations without proper conditions causing exponential result sets
+- **Subquery Inefficiency**: Correlated subqueries that could be rewritten as JOINs
+
+### 2. Caching Issues
+- **Missing Cache for Expensive Operations**:
+  - External API calls without caching
+  - Heavy computations repeated on every request
+  - Database queries for static/rarely-changing data
+- **Cache Key Design**: Non-unique or overly-broad cache keys causing stale data
+- **Cache Invalidation**: Missing invalidation logic when underlying data changes
+- **Over-caching**: Caching data that changes frequently or is user-specific
+- **Missing Cache Headers**: HTTP responses without appropriate Cache-Control headers
+
+### 3. React/Frontend Performance
+- **Unnecessary Re-renders**:
+  - Context providers creating new object references on every render
+  - Missing useMemo/useCallback for expensive computations/callbacks passed to children
+  - Non-memoized component props causing cascade re-renders
+- **Large Bundle Size**:
+  - Missing code splitting for large components/routes
+  - Importing entire libraries when only small parts are needed
+  - Duplicate dependencies in bundle
+- **Inefficient Effects**:
+  - useEffect with missing dependencies causing excessive runs
+  - Effects running on every render when they should be throttled/debounced
+  - Expensive operations in render function instead of effects
+- **Virtual List Missing**: Rendering large lists without virtualization (e.g., 1000+ items)
+- **Image Optimization**: Missing lazy loading, missing srcset, unoptimized image formats
+
+### 4. API/Request Handler Performance
+- **Blocking Operations**: Synchronous I/O or CPU-intensive work in request handlers
+- **Missing Streaming**: Large responses not using streaming (e.g., file downloads, SSE)
+- **Serial vs Parallel**: Sequential awaits when operations could run in parallel
+- **Timeout Issues**: Missing or excessive timeouts on external calls
+- **Request Batching**: Multiple similar requests that could be batched into one
+- **Missing Compression**: Responses not using gzip/brotli for compressible data
+- **Cold Start Issues**: Heavy initialization in serverless functions on every invocation
+
+### 5. Data Structure & Algorithm Inefficiency
+- **O(n²) or Worse**: Nested loops, repeated array searches (use Set/Map for O(1) lookup)
+- **Unnecessary Sorting**: Sorting data that doesn't need to be sorted
+- **Repeated Transformations**: Same data transformed multiple times (memoize/cache result)
+- **Large Object Cloning**: Deep cloning large objects when shallow copy or mutation would suffice
+- **String Concatenation in Loops**: Using += for strings in loops (use array.join())
+- **RegEx in Hot Paths**: Complex regex in frequently-called code
+
+### 6. Network & I/O Performance
+- **Missing Connection Pooling**: Creating new DB/HTTP connections for each request
+- **Large Payloads**: Sending excessive data over network when subset would suffice
+- **No Request Deduplication**: Same external request made multiple times concurrently
+- **Waterfall Requests**: Sequential API calls when they could be parallel
+- **Missing Preloading**: Not prefetching data that will definitely be needed
+- **Excessive Polling**: Short polling intervals when longer intervals or webhooks would work
+
+### 7. Memory & Resource Leaks
+- **Memory Leaks**:
+  - Event listeners not cleaned up in useEffect/componentWillUnmount
+  - Intervals/timers not cleared
+  - Large data structures kept in closures unnecessarily
+  - Caches without eviction policies growing unbounded
+- **File Handle Leaks**: Opened files/streams not properly closed
+- **Connection Leaks**: Database/HTTP connections not returned to pool
+
+## Framework-Specific Performance Checks
+
+### Next.js Specific
+- **Server vs Client Components**: Client components used when server components would work (increases bundle)
+- **Missing Route Prefetching**: <Link> components not prefetching on hover
+- **Static vs Dynamic Rendering**: Using dynamic rendering (force-dynamic) when static would work
+- **Missing ISR/SSG**: Pages that could be statically generated are fully dynamic
+- **Image Component**: Using <img> instead of Next.js <Image> component
+- **Font Optimization**: Missing next/font for Google Fonts optimization
+
+### React Query / Data Fetching
+- **Excessive Refetch Intervals**: staleTime/refetchInterval too aggressive
+- **Missing Query Keys**: Ineffective caching due to poor query key design
+- **No Background Refetch**: Missing background updates for stale data
+
+## Review Instructions
+
+1. Read the diff and identify performance-sensitive code paths:
+   - API route handlers, middleware, authentication
+   - Database queries, external API calls
+   - Component render paths, especially context providers
+   - Data transformations, loops over large datasets
+
+2. For each performance-sensitive area:
+   - Assess if the change introduces new inefficiency
+   - Check if existing inefficiency could be improved
+   - Verify caching is appropriate for the data access pattern
+
+3. Use tools to investigate:
+   - Read full files to understand hot paths and call frequency
+   - Grep for similar patterns that might have been optimized elsewhere
+   - Check for existing caching utilities or patterns in the codebase
+
+4. Report only actionable performance issues:
+   - Issues with measurable impact (e.g., query in hot path)
+   - Missing obvious optimizations (e.g., no caching for static data)
+   - Anti-patterns with known performance costs (e.g., N+1 queries)
+
+5. Do NOT report:
+   - Micro-optimizations with negligible impact
+   - Theoretical issues without real-world impact
+   - Premature optimization for code that's not performance-critical
+
+## Output Format
+
+Report performance issues in this format:
+
+**[SEVERITY]** `file/path.ext:line` - Brief description
+> Explanation of the performance issue and impact
+> Recommended fix
+
+Severity levels:
+- **CRITICAL**: Will cause unacceptable latency, timeouts, or resource exhaustion in production
+- **MAJOR**: Noticeable performance impact, especially under load or with growing data
+- **MINOR**: Optimization opportunity with measurable but small impact
+
+If no performance issues are found, respond with: "No performance issues found. LGTM."
+
+---
+
+CHANGED FILES:
+{files}
+
+DIFF:
+```diff
+{diff}
+```
+
+Review the changes above for performance issues and optimization opportunities.

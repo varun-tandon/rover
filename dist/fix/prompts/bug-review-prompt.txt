@@ -61,6 +61,12 @@ You are reviewing code changes for bugs, errors, and implementation mistakes. Fo
 - **Missing dependencies**: Using packages not in package.json
 - **Version incompatibilities**: Using API from wrong version of a library
 
+### 9. Redundant Code After Abstraction
+- **Redundant error handling**: Inner try-catch blocks after wrapping with error handler (e.g., withErrorHandler wraps function but inner try-catch remains)
+- **Duplicate validation**: Validation logic that's now handled by wrapper/middleware
+- **Obsolete boilerplate**: Code that abstraction was meant to eliminate but still exists
+- **Double wrapping**: Applying the same wrapper/decorator twice (e.g., memo(memo(Component)))
+
 ## Review Instructions
 
 1. Read the diff carefully, paying attention to the actual code changes
@@ -87,6 +93,17 @@ Before concluding your review, you MUST verify the change is complete across the
 3. **Flag Inconsistencies**: If the change creates inconsistency with related/sibling code, flag it as CRITICAL:
    - "Auth added to intersection-data but area-data and road-data have no auth - security bypass"
    - "ChartJS.register centralized but 9 components still have redundant registrations"
+
+4. **Application Hierarchy Check (React/Next.js)**: For layout, provider, or context changes, trace the component hierarchy:
+   - **Read Parent Components**: If changing a layout or adding providers, read the parent layout/provider files (e.g., app/layout.tsx, app/providers.tsx, root provider files)
+   - **Check for Duplicate Providers**: Look for duplicate Context Providers at different nesting levels. Example:
+     - Root providers.tsx already has `<SidebarProvider>` → adding another in nested layout = duplicate context
+     - Root has `<AuthProvider>` → nested route adding `<AuthProvider>` = broken auth state
+   - **Verify Conditional Logic**: If parent providers use conditional rendering (e.g., different providers for different modes), ensure nested providers don't conflict:
+     - If root skips SidebarProvider in mode A, nested layout can add it
+     - If root includes SidebarProvider in mode B, nested layout MUST NOT add it
+   - **Trace Provider Nesting**: Map out the full provider tree from root → layout → page to detect conflicts
+   - **Flag Duplicate Contexts as CRITICAL**: Duplicate providers break React context and cause unpredictable state behavior
 
 A change that is correct in isolation but incomplete across the system is a bug.
 

@@ -11,6 +11,7 @@ interface FullReviewResult {
     architectureReview: string;
     bugReview: string;
     completenessReview: string;
+    performanceReview: string;
     combined: string;
 }
 /**
@@ -32,7 +33,12 @@ export declare function runCompletenessReview(worktreePath: string, options: Rev
     issueContent: string;
 }): Promise<string>;
 /**
- * Run architecture, bug, and completeness reviews
+ * Run performance-focused code review
+ * Checks for performance issues, inefficiencies, and potential bottlenecks
+ */
+export declare function runPerformanceReview(worktreePath: string, options?: ReviewOptions): Promise<string>;
+/**
+ * Run architecture, bug, performance, and completeness reviews
  * All reviews must pass for the fix to be considered complete
  * Completeness review only runs if issueContent is provided
  */

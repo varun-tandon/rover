@@ -16,6 +16,8 @@ const BUG_REVIEW_PROMPT_PATH = process.env['ROVER_BUG_REVIEW_PROMPT_PATH']
     ?? join(__dirname, 'prompts', 'bug-review-prompt.txt');
 const COMPLETENESS_REVIEW_PROMPT_PATH = process.env['ROVER_COMPLETENESS_REVIEW_PROMPT_PATH']
     ?? join(__dirname, 'prompts', 'completeness-review-prompt.txt');
+const PERFORMANCE_REVIEW_PROMPT_PATH = process.env['ROVER_PERFORMANCE_REVIEW_PROMPT_PATH']
+    ?? join(__dirname, 'prompts', 'performance-review-prompt.txt');
 /**
  * Get the default branch name (main, master, etc.)
  */
@@ -239,12 +241,16 @@ async function runSingleReview(worktreePath, reviewType, options = {}) {
         ? ARCHITECTURE_REVIEW_PROMPT_PATH
         : reviewType === 'bug'
             ? BUG_REVIEW_PROMPT_PATH
-            : COMPLETENESS_REVIEW_PROMPT_PATH;
+            : reviewType === 'performance'
+                ? PERFORMANCE_REVIEW_PROMPT_PATH
+                : COMPLETENESS_REVIEW_PROMPT_PATH;
     const reviewLabel = reviewType === 'architecture'
         ? 'Architecture Review'
         : reviewType === 'bug'
             ? 'Bug Review'
-            : 'Completeness Review';
+            : reviewType === 'performance'
+                ? 'Performance Review'
+                : 'Completeness Review';
     // Read the review prompt template
     const reviewPromptTemplate = await readFile(promptPath, 'utf-8');
     // Get the diff and changed files
@@ -418,7 +424,14 @@ export async function runCompletenessReview(worktreePath, options) {
     return runSingleReview(worktreePath, 'completeness', options);
 }
 /**
- * Run architecture, bug, and completeness reviews
+ * Run performance-focused code review
+ * Checks for performance issues, inefficiencies, and potential bottlenecks
+ */
+export async function runPerformanceReview(worktreePath, options = {}) {
+    return runSingleReview(worktreePath, 'performance', options);
+}
+/**
+ * Run architecture, bug, performance, and completeness reviews
  * All reviews must pass for the fix to be considered complete
  * Completeness review only runs if issueContent is provided
  */
@@ -433,6 +446,10 @@ export async function runFullReview(worktreePath, options = {}) {
         onProgress('[Full Review] Starting bug review...');
     }
     const bugReview = await runSingleReview(worktreePath, 'bug', options);
+    if (onProgress) {
+        onProgress('[Full Review] Starting performance review...');
+    }
+    const performanceReview = await runSingleReview(worktreePath, 'performance', options);
     // Run completeness review only if issue content is provided
     let completenessReview = '';
     if (issueContent) {
@@ -455,11 +472,16 @@ ${architectureReview}
 
 ## Bug Review
 
-${bugReview}${completenessSection}`;
+${bugReview}
+
+## Performance Review
+
+${performanceReview}${completenessSection}`;
     return {
         architectureReview,
         bugReview,
         completenessReview,
+        performanceReview,
         combined,
     };
 }

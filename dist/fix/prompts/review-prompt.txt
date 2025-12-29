@@ -334,6 +334,82 @@ Before reviewing the code changes, you MUST understand how the changed files fit
 
 This contextual analysis is essential. A change that is "correct in isolation" but creates system-wide inconsistency is a bug.
 
+## Framework-Specific Best Practices: Next.js
+
+When reviewing Next.js applications, verify adherence to framework-specific patterns that prevent common pitfalls:
+
+### 1. Metadata Precedence
+- **Page metadata overrides layout metadata**: If both `page.tsx` and `layout.tsx` export metadata, only page.tsx metadata is used
+- **Action**: Flag redundant layout metadata when page.tsx already has metadata
+- **Why**: Wasted effort, potential confusion, no actual effect
+
+### 2. Client/Server Component Boundaries
+- **Server components by default**: Components without 'use client' are server components
+- **Client boundaries**: 'use client' makes that component and all imports client-side
+- **Action**: Verify 'use client' is only used when necessary (hooks, browser APIs, interactivity)
+- **Flag**: Converting server layouts to client layouts unnecessarily increases bundle size
+
+### 3. Provider Hierarchy
+- **Root providers**: App-level providers typically in `app/providers.tsx` or `app/layout.tsx`
+- **Action**: When adding providers to nested layouts, check root providers for conflicts
+- **Critical**: Duplicate providers at different nesting levels break React context
+- **Example**: Root has `<SidebarProvider>`, nested layout adds another → double-nested context
+
+### 4. Caching and Revalidation
+- **Static vs Dynamic**: `export const dynamic = 'force-static'` vs `'force-dynamic'`
+- **Cache functions**: `unstable_cache()` for data caching, ISR with `revalidate`
+- **Action**: Verify caching strategy matches data freshness requirements
+- **Flag**: Missing cache headers on static/rarely-changing data
+
+### 5. Route Handler Conventions
+- **Named exports**: Route handlers use `GET`, `POST`, etc. as named exports
+- **Error handling**: Should use consistent error handler wrappers (e.g., `withErrorHandler`)
+- **Action**: Check for consistent patterns across sibling routes
+- **Flag**: Inconsistent auth, validation, or error handling across similar endpoints
+
+### 6. Image and Font Optimization
+- **Use framework components**: `next/image` over `<img>`, `next/font` over manual font loading
+- **Why**: Automatic optimization, better performance, better UX
+- **Action**: Flag basic `<img>` tags that should use Next.js `<Image>`
+
+### 7. Data Fetching Patterns
+- **Server components**: Fetch directly in server components (no need for useEffect)
+- **Client components**: Use hooks (React Query, SWR, or useState + useEffect)
+- **Action**: Flag server-side data fetching moved to client unnecessarily
+
+## Redundancy Detection After Abstraction
+
+When a change introduces abstraction (wrappers, utilities, centralized logic), verify the abstraction is complete:
+
+### 1. Error Handling Abstractions
+- **Pattern**: `withErrorHandler`, `tryCatch`, error boundary wrappers
+- **Check**: Are there inner try-catch blocks that are now redundant?
+- **Example**: `withErrorHandler(async () => { try { ... } catch { ... } })` ← inner try-catch is redundant
+- **Action**: Flag redundant error handling that the wrapper already provides
+
+### 2. Validation/Auth Abstractions
+- **Pattern**: Middleware, auth wrappers like `requireAuth`, validation wrappers
+- **Check**: Is validation/auth still duplicated in wrapped functions?
+- **Example**: `withAuth(async () => { const user = await checkAuth(); ... })` ← checkAuth is redundant
+- **Action**: Remove redundant checks that the wrapper handles
+
+### 3. Centralized Utilities
+- **Pattern**: Moving repeated logic to shared utility (e.g., `crashesToGeoJSON`)
+- **Check**: Were all instances updated to use the utility?
+- **Use Glob/Grep**: Search for the old pattern to find stragglers
+- **Action**: Flag incomplete migrations where some files still have the old pattern
+
+### 4. Double-Wrapping
+- **Pattern**: Applying same wrapper/HOC/decorator twice
+- **Examples**: `memo(memo(Component))`, `withAuth(withAuth(handler))`, nested identical contexts
+- **Action**: Flag as redundant and potentially breaking
+- **Why**: Wasted computation, possible context conflicts
+
+### 5. Obsolete Boilerplate
+- **Pattern**: After introducing abstraction, old setup/cleanup code may be obsolete
+- **Examples**: Manual error formatting after using error handler, manual cache key generation after using cache wrapper
+- **Action**: Verify abstraction eliminates the need for boilerplate, flag if boilerplate remains
+
 ---
 
 OK, these are our code review principles. I want you to review the changes on this branch relative to the main branch and the changes that are on files that are not tracked.

@@ -73,10 +73,20 @@ export interface ReviewAnalysis {
 export interface ReviewTrace {
   architectureOutput: string;
   bugOutput: string;
+  performanceOutput: string;
   completenessOutput: string;
   combinedOutput: string;
   parsedItems: ReviewItem[];
   actionableCount: number;
+}
+
+export interface ValidationResult {
+  typecheckPassed: boolean;
+  typecheckOutput?: string;
+  buildPassed: boolean;
+  buildOutput?: string;
+  lintPassed: boolean;
+  lintOutput?: string;
 }
 
 export interface IterationTrace {
@@ -92,6 +102,9 @@ export interface IterationTrace {
   // Markers detected
   alreadyFixed: boolean;
   reviewNotApplicable: boolean;
+
+  // Validation checks (typecheck, build, lint)
+  validation?: ValidationResult;
 
   // Review (if run)
   review?: ReviewTrace;

@@ -320,9 +320,14 @@ INSTRUCTIONS:
 5. If already fixed, respond with "ALREADY_FIXED" and explain briefly why
 6. If not fixed, implement the fix following best practices
 7. Run tests if available to verify the fix
-8. Before committing, run "git status" and carefully review all modified files
-9. ONLY stage files that are DIRECTLY related to fixing this specific issue
-10. Commit your changes with a descriptive message
+8. CRITICAL: After making changes, your code will be automatically checked for:
+   - TypeScript errors (via typecheck script if available)
+   - Build errors (via build script if available)
+   - Lint errors (via lint script if available)
+   If any of these checks fail, you will receive the errors and must fix them before proceeding.
+9. Before committing, run "git status" and carefully review all modified files
+10. ONLY stage files that are DIRECTLY related to fixing this specific issue
+11. Commit your changes with a descriptive message
 
 CRITICAL - COMMIT DISCIPLINE:
 - ONLY commit files you directly modified to fix this issue
@@ -368,6 +373,14 @@ ${itemsList}
 
 Please fix these issues and commit the changes.
 Focus on "must_fix" items first, then "should_fix" items.
+
+CRITICAL - VALIDATION REQUIREMENTS:
+- After making changes, your code will be automatically checked for:
+  * TypeScript errors (via typecheck script if available)
+  * Build errors (via build script if available)
+  * Lint errors (via lint script if available)
+- ALL validation checks must pass before proceeding to code review
+- If validation fails, you will receive the errors and must fix them
 
 CRITICAL - COMMIT DISCIPLINE:
 - ONLY commit files you directly modified to address the review feedback
