@@ -175,6 +175,107 @@ function readFileAsync(path: string) {
 }
 \`\`\`
 
+11. AWAIT BEFORE CONDITIONAL CHECK
+Blocking on data that might not be needed:
+\`\`\`typescript
+// BAD: Always fetches even if validation fails
+async function processOrder(orderId: string) {
+  const order = await getOrder(orderId);  // 200ms
+  const inventory = await checkInventory(orderId);  // 300ms
+
+  if (!order) {
+    return { error: 'Order not found' };  // Could have returned earlier!
+  }
+
+  return processWithInventory(order, inventory);
+}
+
+// GOOD: Defer await until needed
+async function processOrder(orderId: string) {
+  const orderPromise = getOrder(orderId);
+  const inventoryPromise = checkInventory(orderId);
+
+  const order = await orderPromise;
+  if (!order) {
+    return { error: 'Order not found' };  // Fails fast
+  }
+
+  const inventory = await inventoryPromise;
+  return processWithInventory(order, inventory);
+}
+
+// Or: Check early, fetch late
+async function processOrder(orderId: string) {
+  const order = await getOrder(orderId);
+  if (!order) return { error: 'Order not found' };
+
+  // Only fetch inventory if order exists
+  const inventory = await checkInventory(orderId);
+  return processWithInventory(order, inventory);
+}
+\`\`\`
+
+12. BLOCKING AWAITS IN API ROUTES
+Sequential fetches blocking response:
+\`\`\`typescript
+// BAD: API handler with sequential awaits
+export async function GET(req: Request) {
+  const user = await getUser();         // 100ms
+  const permissions = await getPerms(); // 100ms
+  const config = await getConfig();     // 100ms
+  // Total: 300ms sequential
+
+  return Response.json({ user, permissions, config });
+}
+
+// GOOD: Parallel execution
+export async function GET(req: Request) {
+  const [user, permissions, config] = await Promise.all([
+    getUser(),
+    getPerms(),
+    getConfig(),
+  ]);
+  // Total: ~100ms parallel
+
+  return Response.json({ user, permissions, config });
+}
+\`\`\`
+
+13. MISSING SUSPENSE FOR NON-BLOCKING UI
+Blocking entire layout on data fetch:
+\`\`\`tsx
+// BAD: Entire page waits for slow data
+export default async function Dashboard() {
+  const slowData = await getAnalytics();  // 2 seconds
+
+  return (
+    <div>
+      <Header />              {/* Waits 2s to show! */}
+      <Sidebar />             {/* Waits 2s to show! */}
+      <Analytics data={slowData} />
+    </div>
+  );
+}
+
+// GOOD: Non-blocking with Suspense
+export default function Dashboard() {
+  return (
+    <div>
+      <Header />              {/* Shows immediately */}
+      <Sidebar />             {/* Shows immediately */}
+      <Suspense fallback={<AnalyticsSkeleton />}>
+        <AnalyticsLoader />   {/* Streams when ready */}
+      </Suspense>
+    </div>
+  );
+}
+
+async function AnalyticsLoader() {
+  const data = await getAnalytics();
+  return <Analytics data={data} />;
+}
+\`\`\`
+
 SEVERITY LEVELS:
 - CRITICAL: Unhandled rejections in critical paths, race conditions
 - HIGH: Sequential awaits that add significant latency, forEach with async
@@ -189,7 +290,7 @@ Return issues as a JSON array. Each issue must have:
 - severity: low | medium | high | critical
 - filePath: Path to the affected file
 - lineRange: { start, end } if applicable
-- category: "Sequential Await" | "Unnecessary Async" | "Unhandled Rejection" | "Race Condition" | "Loop Await" | "Mixed Paradigm" | "Promise Anti-pattern"
+- category: "Sequential Await" | "Unnecessary Async" | "Unhandled Rejection" | "Race Condition" | "Loop Await" | "Mixed Paradigm" | "Promise Anti-pattern" | "Deferred Await" | "API Route Blocking" | "Missing Suspense"
 - recommendation: The efficient async pattern to use
 - codeSnippet: The problematic code
 

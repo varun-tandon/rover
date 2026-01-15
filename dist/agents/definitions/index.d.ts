@@ -42,6 +42,9 @@ import { partialMigrationDetector } from './partial-migration-detector.js';
 import { stateDuplicationAuditor } from './state-duplication-auditor.js';
 import { dataFetchingConsistencyAuditor } from './data-fetching-consistency-auditor.js';
 import { asyncFireAndForgetDetector } from './async-fire-and-forget-detector.js';
+import { jsPerformanceAuditor } from './js-performance-auditor.js';
+import { serverCachingAuditor } from './server-caching-auditor.js';
+import { renderingPerformanceAuditor } from './rendering-performance-auditor.js';
 /**
  * Registry of all available scanning agents
  */
@@ -58,4 +61,4 @@ export declare function getAgent(id: string): AgentDefinition | undefined;
  * Get all agents as an array
  */
 export declare function getAllAgents(): AgentDefinition[];
-export { depthGauge, generalizer, cohesionAnalyzer, layerPetrifier, boilerplateBuster, obviousnessAuditor, whyAsker, namingRenovator, commentNoiseDetector, consistencyCop, exceptionAuditor, logicDetective, concurrencyAuditor, accessibilityAuditor, stateArchitectureAuditor, configCleaner, queryOptimizer, asyncEfficiencyAuditor, dependencyAuditor, deadCodeDetector, complexityAnalyzer, duplicationFinder, staleArtifactDetector, apiContractValidator, clientBoundaryOptimizer, serverActionAuditor, dataFetchingStrategist, routeSegmentAnalyzer, nextjsAssetOptimizer, hydrationMismatchDetector, navigationPatternEnforcer, metadataChecker, designSystemEnforcer, reactPatternsAuditor, nextjsRenderingOptimizer, bundlePerformanceAuditor, securityAuditor, typescriptQualityAuditor, apiRouteConsistencyAuditor, partialMigrationDetector, stateDuplicationAuditor, dataFetchingConsistencyAuditor, asyncFireAndForgetDetector, };
+export { depthGauge, generalizer, cohesionAnalyzer, layerPetrifier, boilerplateBuster, obviousnessAuditor, whyAsker, namingRenovator, commentNoiseDetector, consistencyCop, exceptionAuditor, logicDetective, concurrencyAuditor, accessibilityAuditor, stateArchitectureAuditor, configCleaner, queryOptimizer, asyncEfficiencyAuditor, dependencyAuditor, deadCodeDetector, complexityAnalyzer, duplicationFinder, staleArtifactDetector, apiContractValidator, clientBoundaryOptimizer, serverActionAuditor, dataFetchingStrategist, routeSegmentAnalyzer, nextjsAssetOptimizer, hydrationMismatchDetector, navigationPatternEnforcer, metadataChecker, designSystemEnforcer, reactPatternsAuditor, nextjsRenderingOptimizer, bundlePerformanceAuditor, securityAuditor, typescriptQualityAuditor, apiRouteConsistencyAuditor, partialMigrationDetector, stateDuplicationAuditor, dataFetchingConsistencyAuditor, asyncFireAndForgetDetector, jsPerformanceAuditor, serverCachingAuditor, renderingPerformanceAuditor, };

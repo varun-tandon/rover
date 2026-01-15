@@ -269,6 +269,91 @@ export default async function PublicPage() {
 }
 \`\`\`
 
+=== CLIENT-SIDE DATA FETCHING ===
+
+11. DUPLICATE CLIENT FETCHES WITHOUT SWR
+Multiple components fetching same data:
+\`\`\`tsx
+// BAD: Each component makes separate requests
+function UserAvatar() {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    fetch('/api/user').then(r => r.json()).then(setUser);
+  }, []);
+  return user && <img src={user.avatar} />;
+}
+
+function UserName() {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    fetch('/api/user').then(r => r.json()).then(setUser);  // Duplicate!
+  }, []);
+  return user && <span>{user.name}</span>;
+}
+
+// GOOD: SWR automatically deduplicates
+import useSWR from 'swr';
+
+function UserAvatar() {
+  const { data: user } = useSWR('/api/user', fetcher);
+  return user && <img src={user.avatar} />;
+}
+
+function UserName() {
+  const { data: user } = useSWR('/api/user', fetcher);
+  // Same key = same request, automatically shared
+  return user && <span>{user.name}</span>;
+}
+
+// For immutable data:
+import useSWRImmutable from 'swr/immutable';
+const { data } = useSWRImmutable('/api/config', fetcher);
+\`\`\`
+
+12. DUPLICATE EVENT LISTENERS
+Multiple hook instances creating separate listeners:
+\`\`\`tsx
+// BAD: N components = N event listeners
+function useKeyboardShortcut(key: string, callback: () => void) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === key) callback();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [key, callback]);  // Each instance adds a listener!
+}
+
+// Used in 10 components = 10 keydown listeners
+
+// GOOD: Deduplicate with shared listener
+const keyCallbacks = new Map<string, Set<() => void>>();
+let globalListener: ((e: KeyboardEvent) => void) | null = null;
+
+function useKeyboardShortcut(key: string, callback: () => void) {
+  useEffect(() => {
+    if (!keyCallbacks.has(key)) {
+      keyCallbacks.set(key, new Set());
+    }
+    keyCallbacks.get(key)!.add(callback);
+
+    // Only one global listener
+    if (!globalListener) {
+      globalListener = (e: KeyboardEvent) => {
+        keyCallbacks.get(e.key)?.forEach(cb => cb());
+      };
+      window.addEventListener('keydown', globalListener);
+    }
+
+    return () => {
+      keyCallbacks.get(key)?.delete(callback);
+    };
+  }, [key, callback]);
+}
+
+// Or use useSWRSubscription for automatic deduplication
+\`\`\`
+
 SEVERITY LEVELS:
 - HIGH: Waterfall fetches, client-side when server works, missing cache config
 - MEDIUM: Over-fetching, missing generateStaticParams, no loading states
@@ -282,7 +367,7 @@ Return issues as a JSON array. Each issue must have:
 - severity: low | medium | high
 - filePath: Path to the affected file
 - lineRange: { start, end } if applicable
-- category: "Waterfall Fetch" | "Missing Deduplication" | "No Cache Config" | "Over-Fetching" | "Client-Side Fetch" | "Missing Static Params" | "Missing Loading State" | "Wrong Component" | "Unhandled Error" | "Unnecessary Dynamic"
+- category: "Waterfall Fetch" | "Missing Deduplication" | "No Cache Config" | "Over-Fetching" | "Client-Side Fetch" | "Missing Static Params" | "Missing Loading State" | "Wrong Component" | "Unhandled Error" | "Unnecessary Dynamic" | "Duplicate Client Fetch" | "Duplicate Event Listener"
 - recommendation: The optimized fetching pattern
 - codeSnippet: The problematic code
 

@@ -71,6 +71,11 @@ import { stateDuplicationAuditor } from './state-duplication-auditor.js';
 import { dataFetchingConsistencyAuditor } from './data-fetching-consistency-auditor.js';
 import { asyncFireAndForgetDetector } from './async-fire-and-forget-detector.js';
 
+// React/JS performance agents (from Vercel best practices)
+import { jsPerformanceAuditor } from './js-performance-auditor.js';
+import { serverCachingAuditor } from './server-caching-auditor.js';
+import { renderingPerformanceAuditor } from './rendering-performance-auditor.js';
+
 /**
  * Registry of all available scanning agents
  */
@@ -145,6 +150,11 @@ export const agents: Record<string, AgentDefinition> = {
   'state-duplication-auditor': stateDuplicationAuditor,
   'data-fetching-consistency-auditor': dataFetchingConsistencyAuditor,
   'async-fire-and-forget-detector': asyncFireAndForgetDetector,
+
+  // React/JS performance agents (from Vercel best practices)
+  'js-performance-auditor': jsPerformanceAuditor,
+  'server-caching-auditor': serverCachingAuditor,
+  'rendering-performance-auditor': renderingPerformanceAuditor,
 };
 
 /**
@@ -240,4 +250,9 @@ export {
   stateDuplicationAuditor,
   dataFetchingConsistencyAuditor,
   asyncFireAndForgetDetector,
+
+  // React/JS performance agents (from Vercel best practices)
+  jsPerformanceAuditor,
+  serverCachingAuditor,
+  renderingPerformanceAuditor,
 };

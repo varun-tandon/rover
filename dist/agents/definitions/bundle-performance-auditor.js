@@ -222,6 +222,116 @@ import 'bootstrap/dist/css/bootstrap.css';  // 200KB+
 import * as FaIcons from 'react-icons/fa';
 \`\`\`
 
+=== PART 3: LOADING STRATEGIES ===
+
+14. MISSING PRELOAD ON USER INTENT
+Heavy components loaded on click instead of hover/focus:
+\`\`\`typescript
+// BAD: User waits for 300KB editor on click
+function CodeButton() {
+  const [Editor, setEditor] = useState(null);
+
+  const handleClick = async () => {
+    const mod = await import('@monaco-editor/react');  // Loads NOW
+    setEditor(mod.default);
+  };
+
+  return <button onClick={handleClick}>Open Editor</button>;
+}
+
+// GOOD: Preload on hover/focus
+function CodeButton() {
+  const [Editor, setEditor] = useState(null);
+
+  const preload = () => {
+    if (typeof window !== 'undefined') {
+      import('@monaco-editor/react');  // Starts loading early
+    }
+  };
+
+  const handleClick = async () => {
+    const mod = await import('@monaco-editor/react');
+    setEditor(mod.default);
+  };
+
+  return (
+    <button
+      onMouseEnter={preload}
+      onFocus={preload}
+      onClick={handleClick}
+    >
+      Open Editor
+    </button>
+  );
+}
+\`\`\`
+
+15. MISSING CONDITIONAL MODULE LOADING
+Loading heavy modules unconditionally:
+\`\`\`typescript
+// BAD: Animation module always loaded
+import { animationFrames } from './heavy-animations';
+
+function Feature({ enabled }) {
+  if (!enabled) return null;
+  return <Animation frames={animationFrames} />;
+}
+
+// GOOD: Load only when feature is enabled
+function Feature({ enabled }) {
+  const [frames, setFrames] = useState(null);
+
+  useEffect(() => {
+    if (enabled && typeof window !== 'undefined') {
+      import('./heavy-animations').then(mod => {
+        setFrames(mod.animationFrames);
+      });
+    }
+  }, [enabled]);
+
+  if (!enabled || !frames) return null;
+  return <Animation frames={frames} />;
+}
+\`\`\`
+
+16. ANALYTICS/LOGGING IN INITIAL BUNDLE
+Non-critical third-party in main bundle:
+\`\`\`typescript
+// BAD: Analytics in initial bundle
+import Analytics from '@segment/analytics-next';
+import * as Sentry from '@sentry/nextjs';
+
+export default function App() {
+  return (
+    <>
+      <Analytics />
+      <Sentry.ErrorBoundary>
+        <Main />
+      </Sentry.ErrorBoundary>
+    </>
+  );
+}
+
+// GOOD: Defer with dynamic import
+import dynamic from 'next/dynamic';
+
+const Analytics = dynamic(
+  () => import('@segment/analytics-next'),
+  { ssr: false }  // Load after hydration
+);
+
+const SentryErrorBoundary = dynamic(
+  () => import('@sentry/nextjs').then(mod => mod.ErrorBoundary),
+  { ssr: false }
+);
+\`\`\`
+
+Libraries to defer:
+- Analytics (Segment, Mixpanel, Amplitude)
+- Error tracking (Sentry, Bugsnag, LogRocket)
+- Chat widgets (Intercom, Zendesk)
+- Feature flags (LaunchDarkly, Statsig)
+
 SEVERITY LEVELS:
 - CRITICAL: Server code in client, moment/lodash full import, 'use client' at page level
 - HIGH: Barrel imports, polyfill bloat, namespace imports of large libraries
@@ -236,7 +346,7 @@ Return issues as a JSON array. Each issue must have:
 - severity: low | medium | high | critical
 - filePath: Path to the affected file
 - lineRange: { start, end } if applicable
-- category: "Full Library Import" | "Barrel Import" | "Missing Type Import" | "Heavy Library" | "Server In Client" | "Dev In Prod" | "Polyfill Bloat" | "Query Hygiene" | "Layout Shift" | "Provider Hell" | "Client Boundary" | "Namespace Import"
+- category: "Full Library Import" | "Barrel Import" | "Missing Type Import" | "Heavy Library" | "Server In Client" | "Dev In Prod" | "Polyfill Bloat" | "Query Hygiene" | "Layout Shift" | "Provider Hell" | "Client Boundary" | "Namespace Import" | "Missing Preload" | "Conditional Loading" | "Deferred Third Party"
 - recommendation: The optimized pattern
 - codeSnippet: The problematic code
 

@@ -158,6 +158,244 @@ const [lastAction, setLastAction] = useState(null);
 // setLastAction called but lastAction never used
 \`\`\`
 
+=== PART 3: RE-RENDER OPTIMIZATION ===
+
+8. NON-FUNCTIONAL SETSTATE
+Direct state reference causing callback recreation or stale closures:
+\`\`\`tsx
+// BAD: Callback recreated on every items change
+const addItem = useCallback((item) => {
+  setItems([...items, item]);  // Depends on items!
+}, [items]);
+
+// BAD: Potential stale closure if items omitted
+const addItem = useCallback((item) => {
+  setItems([...items, item]);  // items might be stale
+}, []);  // Missing items dependency
+
+// GOOD: Functional setState - always has latest state
+const addItem = useCallback((item) => {
+  setItems(curr => [...curr, item]);  // No items dependency needed
+}, []);
+
+// Works for any state update based on previous value
+setCount(c => c + 1);
+setUsers(prev => prev.filter(u => u.id !== id));
+\`\`\`
+
+9. MISSING TRANSITIONS FOR HIGH-FREQUENCY UPDATES
+Non-urgent state updates blocking UI:
+\`\`\`tsx
+// BAD: Scroll handler blocks UI
+function ScrollTracker() {
+  const [scrollY, setScrollY] = useState(0);
+
+  useEffect(() => {
+    const handler = () => setScrollY(window.scrollY);  // Blocks!
+    window.addEventListener('scroll', handler);
+    return () => window.removeEventListener('scroll', handler);
+  }, []);
+}
+
+// GOOD: Mark non-urgent updates as transitions
+import { useTransition, startTransition } from 'react';
+
+function ScrollTracker() {
+  const [scrollY, setScrollY] = useState(0);
+
+  useEffect(() => {
+    const handler = () => {
+      startTransition(() => setScrollY(window.scrollY));
+    };
+    window.addEventListener('scroll', handler);
+    return () => window.removeEventListener('scroll', handler);
+  }, []);
+}
+
+// Also for search input, drag events, window resize
+\`\`\`
+
+10. MISSING LAZY STATE INITIALIZATION
+Expensive computation on every render:
+\`\`\`tsx
+// BAD: Runs on every render (even though value only used once)
+const [data, setData] = useState(JSON.parse(localStorage.getItem('data')));
+const [index, setIndex] = useState(buildSearchIndex(items));  // Expensive!
+
+// GOOD: Lazy initializer - runs only once
+const [data, setData] = useState(() => JSON.parse(localStorage.getItem('data')));
+const [index, setIndex] = useState(() => buildSearchIndex(items));
+
+// Also for:
+// - Parsing complex data structures
+// - Building Maps/Sets from arrays
+// - DOM measurements
+// - Date parsing
+\`\`\`
+
+11. SUBSCRIPTIONS CAUSING UNNECESSARY RE-RENDERS
+Reading dynamic values at component level:
+\`\`\`tsx
+// BAD: Re-renders on ANY searchParams change
+function SearchButton() {
+  const searchParams = useSearchParams();  // Subscribes to all changes
+
+  const handleClick = () => {
+    const query = searchParams.get('q');
+    doSearch(query);
+  };
+
+  return <button onClick={handleClick}>Search</button>;
+}
+
+// GOOD: Read on-demand in callback
+function SearchButton() {
+  const handleClick = () => {
+    const params = new URLSearchParams(window.location.search);
+    const query = params.get('q');
+    doSearch(query);
+  };
+
+  return <button onClick={handleClick}>Search</button>;
+}
+\`\`\`
+
+=== PART 4: ADVANCED CALLBACK PATTERNS ===
+
+12. HANDLERS CAUSING EFFECT RE-SUBSCRIPTIONS
+Event handlers in effect dependencies:
+\`\`\`tsx
+// BAD: Re-subscribes on every handler change
+function useWindowEvent(event: string, handler: () => void) {
+  useEffect(() => {
+    window.addEventListener(event, handler);
+    return () => window.removeEventListener(event, handler);
+  }, [event, handler]);  // handler changes = re-subscribe
+}
+
+// GOOD: Store handler in ref
+function useWindowEvent(event: string, handler: () => void) {
+  const handlerRef = useRef(handler);
+
+  useEffect(() => {
+    handlerRef.current = handler;
+  }, [handler]);
+
+  useEffect(() => {
+    const listener = () => handlerRef.current();
+    window.addEventListener(event, listener);
+    return () => window.removeEventListener(event, listener);
+  }, [event]);  // Only re-subscribes when event changes
+}
+
+// React 18+: Use useEffectEvent (if available)
+\`\`\`
+
+13. STALE CLOSURES IN DEBOUNCED CALLBACKS
+Callbacks needing latest values without effect re-runs:
+\`\`\`tsx
+// BAD: Effect re-runs whenever onSearch changes
+function SearchInput({ onSearch }) {
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    const timeout = setTimeout(() => onSearch(query), 300);
+    return () => clearTimeout(timeout);
+  }, [query, onSearch]);  // onSearch causes re-runs
+}
+
+// GOOD: useLatest pattern for stable callback reference
+function useLatest<T>(value: T) {
+  const ref = useRef(value);
+  useEffect(() => { ref.current = value; }, [value]);
+  return ref;
+}
+
+function SearchInput({ onSearch }) {
+  const [query, setQuery] = useState('');
+  const onSearchRef = useLatest(onSearch);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => onSearchRef.current(query), 300);
+    return () => clearTimeout(timeout);
+  }, [query]);  // Only query triggers effect
+}
+\`\`\`
+
+=== PART 5: EFFECT & MEMOIZATION PATTERNS ===
+
+14. OBJECT DEPENDENCIES IN EFFECTS
+Passing objects instead of primitives to dependency arrays:
+\`\`\`tsx
+// BAD: Effect re-runs on any user field change
+function UserProfile({ user }) {
+  useEffect(() => {
+    trackPageView(user.id);
+  }, [user]);  // Object reference changes every render!
+}
+
+// BAD: Effect re-runs on unrelated width changes
+function MobileMenu({ viewport }) {
+  useEffect(() => {
+    if (viewport.width < 768) {
+      initMobileMenu();
+    }
+  }, [viewport]);  // Runs on width: 767, 766, 765...
+}
+
+// GOOD: Depend on primitive values
+function UserProfile({ user }) {
+  useEffect(() => {
+    trackPageView(user.id);
+  }, [user.id]);  // Only re-runs when ID changes
+}
+
+// GOOD: Derive boolean outside effect
+function MobileMenu({ viewport }) {
+  const isMobile = viewport.width < 768;
+
+  useEffect(() => {
+    if (isMobile) {
+      initMobileMenu();
+    }
+  }, [isMobile]);  // Only re-runs on true/false transition
+}
+\`\`\`
+
+15. EXPENSIVE WORK BEFORE EARLY RETURN
+Computing values that won't be used:
+\`\`\`tsx
+// BAD: Avatar computed even when loading
+function Profile({ userId, loading }) {
+  const avatar = useMemo(() => {
+    return computeExpensiveAvatar(userId);  // Runs even if loading!
+  }, [userId]);
+
+  if (loading) return <Skeleton />;
+
+  return <div><img src={avatar} /></div>;
+}
+
+// GOOD: Extract to memoized child component
+const UserAvatar = memo(function UserAvatar({ userId }) {
+  const avatar = useMemo(() => computeExpensiveAvatar(userId), [userId]);
+  return <img src={avatar} />;
+});
+
+function Profile({ userId, loading }) {
+  if (loading) return <Skeleton />;  // Early return FIRST
+
+  return (
+    <div>
+      <UserAvatar userId={userId} />  {/* Only renders after check */}
+    </div>
+  );
+}
+
+// The expensive computation never runs when loading=true
+// Note: React Compiler does this automatically
+\`\`\`
+
 === VALID EFFECT USES (DO NOT FLAG) ===
 - Data fetching from APIs
 - Subscriptions (WebSocket, event listeners)
@@ -171,21 +409,25 @@ const [lastAction, setLastAction] = useState(null);
 - For coupled state: Combine into object or use useReducer
 - For prop-to-state: Use prop directly, derive from it, or key the component
 - For effect-state sync: Move computation to render phase
+- For high-frequency updates: Use startTransition
+- For stable callbacks: Use functional setState or useLatest
+- For object deps: Extract primitives or derive booleans
+- For expensive before early return: Extract to memoized components
 
 SEVERITY LEVELS:
-- HIGH: useEffect setting state from props/state, multiple coupled setStates
-- MEDIUM: Derived state stored, state syncing effects
-- LOW: Minor prop mirroring, unnecessary re-render state
+- HIGH: useEffect setting state from props/state, multiple coupled setStates, stale closures, missing transitions on scroll/resize
+- MEDIUM: Derived state stored, state syncing effects, non-functional setState, lazy init missing
+- LOW: Minor prop mirroring, unnecessary re-render state, subscription optimization
 
 OUTPUT FORMAT:
 Return issues as a JSON array. Each issue must have:
 - id: Unique identifier
 - title: Short descriptive title
-- description: Explain why this fights React's declarative model
+- description: Explain why this fights React's declarative model or causes performance issues
 - severity: low | medium | high
 - filePath: Path to the affected file
 - lineRange: { start, end } if applicable
-- category: "Derived State" | "Coupled State" | "Prop Mirror" | "Effect-State Sync" | "Computed in Effect" | "Unnecessary State"
+- category: "Derived State" | "Coupled State" | "Prop Mirror" | "Effect-State Sync" | "Computed in Effect" | "Unnecessary State" | "Non-Functional setState" | "Missing Transition" | "Lazy Init" | "Subscription" | "Handler Ref" | "Stale Closure" | "Object Dependency" | "Expensive Before Return"
 - recommendation: Specific refactoring suggestion
 - codeSnippet: The problematic code
 
